@@ -26,9 +26,15 @@ STDOUT FORMAT
 import os
 import sys
 import json
+import subprocess
 import textwrap
 
-from openai import OpenAI
+# Auto-install dependencies if missing
+try:
+    from openai import OpenAI
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "openai>=1.0.0", "-q"])
+    from openai import OpenAI
 
 # ---------------------------------------------------------------------------
 # Environment variables (MANDATORY)
