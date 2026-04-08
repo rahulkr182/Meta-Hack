@@ -1,42 +1,52 @@
-#!/usr/bin/env python3
-"""Baseline Inference Script for the SQL Query Environment.
+"""
+Inference Script for SQL Query Environment
+===================================
+MANDATORY
+- Before submitting, ensure the following variables are defined in your environment configuration:
+    API_BASE_URL   The API endpoint for the LLM.
+    MODEL_NAME     The model identifier to use for inference.
+    HF_TOKEN       Your Hugging Face / API key.
+    LOCAL_IMAGE_NAME The name of the local image to use for the environment if you are using from_docker_image()
 
-Uses the OpenAI client to run a model against the environment.
-Reads API credentials from environment variables:
-  - API_BASE_URL: Base URL for the OpenAI-compatible API
-  - MODEL_NAME: Model to use for inference
-  - HF_TOKEN: Hugging Face token for authentication (no default)
+- Defaults are set only for API_BASE_URL and MODEL_NAME:
+    API_BASE_URL = os.getenv("API_BASE_URL", "<your-active-endpoint>")
+    MODEL_NAME = os.getenv("MODEL_NAME", "<your-active-model>")
 
-Produces a reproducible baseline score on all tasks.
+- The inference script must be named `inference.py` and placed in the root directory of the project
+- Participants must use OpenAI Client for all LLM calls using above variables
 
-Usage:
-    export API_BASE_URL="https://router.huggingface.co/v1"
-    export MODEL_NAME="meta-llama/Meta-Llama-3.1-8B-Instruct"
-    export HF_TOKEN="hf_..."
-    python inference.py
+STDOUT FORMAT
+- The script must emit exactly three line types to stdout, in this order:
+
+    [START] task=<task_name> env=<benchmark> model=<model_name>
+    [STEP]  step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
+    [END]   success=<true|false> steps=<n> score=<score> rewards=<r1,r2,...,rn>
 """
 
 import os
 import sys
 import json
-import time
+import textwrap
+
+from openai import OpenAI
 
 # ---------------------------------------------------------------------------
-# Environment variables (required by hackathon checklist)
+# Environment variables (MANDATORY)
 # ---------------------------------------------------------------------------
 
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Meta-Llama-3.1-8B-Instruct")
 HF_TOKEN = os.getenv("HF_TOKEN")
-
-# Optional — if you use from_docker_image():
 LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
 
-# ---------------------------------------------------------------------------
-# OpenAI client (required by hackathon checklist)
-# ---------------------------------------------------------------------------
+BENCHMARK = "sql-query-env"
+MAX_STEPS = 3
+TEMPERATURE = 0.0
+MAX_TOKENS = 512
 
-from openai import OpenAI
+# ---------------------------------------------------------------------------
+# OpenAI Client (MANDATORY)
+# ---------------------------------------------------------------------------
 
 client = OpenAI(
     base_url=API_BASE_URL,
@@ -44,10 +54,10 @@ client = OpenAI(
 )
 
 # ---------------------------------------------------------------------------
-# Environment imports
+# Imports
 # ---------------------------------------------------------------------------
 
-sys.path.insert(0, ".")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from sql_env.server.sql_environment import SqlEnvironment
 from sql_env.models import SqlAction
@@ -57,7 +67,8 @@ from sql_env.tasks import TASKS, get_all_task_ids
 # Prompt
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """You are an expert SQL query writer. You are given a database schema and a natural-language question.
+SYSTEM_PROMPT = textwrap.dedent("""
+You are an expert SQL query writer. You are given a database schema and a natural-language question.
 Write the correct SQL query that answers the question.
 
 Rules:
@@ -65,21 +76,20 @@ Rules:
 - Do NOT include markdown code fences
 - Do NOT include explanations
 - Use standard SQLite-compatible SQL
-- Use appropriate JOINs, GROUP BY, HAVING, window functions as needed"""
+""").strip()
 
 
-def build_prompt(schema, question, hint, attempt=1, prev_feedback=""):
-    """Build the user prompt for the LLM."""
+def build_user_prompt(schema, question, hint, attempt=1, prev_feedback=""):
     prompt = f"Database Schema:\n{schema}\n\nQuestion: {question}\n\nHint: {hint}"
     if attempt > 1 and prev_feedback:
-        prompt += f"\n\nPrevious attempt feedback:\n{prev_feedback}\n\nPlease fix your query."
+        prompt += f"\n\nPrevious attempt feedback:\n{prev_feedback}\nPlease fix your query."
     prompt += "\n\nSQL query:"
     return prompt
 
 
 def call_llm(schema, question, hint, attempt=1, prev_feedback=""):
-    """Call the LLM via OpenAI client to generate a SQL query."""
-    user_msg = build_prompt(schema, question, hint, attempt, prev_feedback)
+    """Call the LLM via OpenAI Client."""
+    user_msg = build_user_prompt(schema, question, hint, attempt, prev_feedback)
 
     response = client.chat.completions.create(
         model=MODEL_NAME,
@@ -87,8 +97,8 @@ def call_llm(schema, question, hint, attempt=1, prev_feedback=""):
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_msg},
         ],
-        temperature=0.0,
-        max_tokens=512,
+        temperature=TEMPERATURE,
+        max_tokens=MAX_TOKENS,
     )
 
     content = response.choices[0].message.content.strip()
@@ -105,8 +115,69 @@ def call_llm(schema, question, hint, attempt=1, prev_feedback=""):
 
 
 # ---------------------------------------------------------------------------
-# Main inference loop with structured logging (START/STEP/END)
+# Main
 # ---------------------------------------------------------------------------
+
+def run_task(env, task_id):
+    """Run a single task and emit structured [START]/[STEP]/[END] logs."""
+    task = TASKS[task_id]
+
+    # [START]
+    print(f"[START] task={task_id} env={BENCHMARK} model={MODEL_NAME}")
+
+    obs = env.reset(task_id=task_id, seed=42)
+
+    rewards = []
+    step_count = 0
+    best_reward = 0.0
+    prev_feedback = ""
+    last_error = None
+
+    for attempt in range(1, MAX_STEPS + 1):
+        step_count = attempt
+
+        try:
+            sql_query = call_llm(
+                schema=obs.schema_description,
+                question=obs.question,
+                hint=task.hint,
+                attempt=attempt,
+                prev_feedback=prev_feedback,
+            )
+            last_error = None
+        except Exception as e:
+            sql_query = "SELECT 1;"
+            last_error = str(e)
+
+        # Step
+        obs = env.step(SqlAction(sql_query=sql_query))
+        reward = obs.reward
+        rewards.append(reward)
+
+        if reward > best_reward:
+            best_reward = reward
+
+        done = obs.done
+        error_str = last_error if last_error else (obs.last_action_error if hasattr(obs, 'last_action_error') and obs.last_action_error else "null")
+
+        # [STEP]
+        print(f"[STEP] step={step_count} action={sql_query!r} reward={reward:.2f} done={'true' if done else 'false'} error={error_str}")
+
+        if done:
+            break
+
+        prev_feedback = obs.feedback
+
+    # Score normalized to [0, 1]
+    score = best_reward  # already in [0, 1]
+    success = score >= 0.99
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+
+    # [END]
+    print(f"[END] success={'true' if success else 'false'} steps={step_count} score={score:.2f} rewards={rewards_str}")
+
+    return score
+
 
 def main():
     if not HF_TOKEN:
@@ -114,94 +185,26 @@ def main():
         print("Set it with: export HF_TOKEN='hf_...'")
         sys.exit(1)
 
-    max_attempts = 3
-    env = SqlEnvironment(max_attempts=max_attempts)
+    env = SqlEnvironment(max_attempts=MAX_STEPS)
     all_task_ids = sorted(get_all_task_ids())
 
-    # === START ===
-    print(f"START | model={MODEL_NAME} | api={API_BASE_URL} | tasks={len(all_task_ids)}")
-
+    total_score = 0.0
     results = {}
-    total_reward = 0.0
 
     for task_id in all_task_ids:
-        task = TASKS[task_id]
-        obs = env.reset(task_id=task_id, seed=42)
-
-        best_reward = 0.0
-        best_query = ""
-        solved = False
-        prev_feedback = ""
-        attempts_used = 0
-
-        for attempt in range(1, max_attempts + 1):
-            attempts_used = attempt
-
-            try:
-                sql_query = call_llm(
-                    schema=obs.schema_description,
-                    question=obs.question,
-                    hint=task.hint,
-                    attempt=attempt,
-                    prev_feedback=prev_feedback,
-                )
-            except Exception as e:
-                print(f"STEP | task={task_id} | attempt={attempt} | error={e}")
-                sql_query = "SELECT 1;"
-
-            # Submit to environment
-            obs = env.step(SqlAction(sql_query=sql_query))
-
-            # === STEP ===
-            print(f"STEP | task={task_id} | attempt={attempt} | reward={obs.reward:.4f} | done={obs.done}")
-
-            if obs.reward > best_reward:
-                best_reward = obs.reward
-                best_query = sql_query
-
-            if obs.done:
-                solved = obs.reward_breakdown.get("exact_match", 0.0) >= 1.0
-                break
-
-            prev_feedback = obs.feedback
-            time.sleep(0.5)
-
-        total_reward += best_reward
-        results[task_id] = {
-            "difficulty": task.difficulty,
-            "reward": best_reward,
-            "solved": solved,
-            "attempts": attempts_used,
-            "query": best_query,
-        }
+        score = run_task(env, task_id)
+        total_score += score
+        results[task_id] = score
 
     env.close()
 
-    # === END ===
-    mean_reward = total_reward / len(all_task_ids) if all_task_ids else 0.0
-    solved_count = sum(1 for r in results.values() if r["solved"])
-
-    print(f"END | mean_reward={mean_reward:.4f} | solved={solved_count}/{len(all_task_ids)}")
-
-    # Print summary table
-    print(f"\n{'='*70}")
-    print(f"  SQL Query Environment — Inference Results")
-    print(f"  Model: {MODEL_NAME}")
-    print(f"{'='*70}")
-    print(f"\n{'Task ID':<15} {'Difficulty':<12} {'Reward':>8} {'Solved':>8} {'Attempts':>10}")
-    print("-" * 70)
-
-    for task_id, info in sorted(results.items()):
-        s = "✓" if info["solved"] else "✗"
-        print(f"{task_id:<15} {info['difficulty']:<12} {info['reward']:>8.4f} {s:>8} {info['attempts']:>10}")
-
-    print("-" * 70)
-    print(f"\nOverall: mean_reward={mean_reward:.4f}, solved={solved_count}/{len(all_task_ids)}")
+    # Summary
+    mean_score = total_score / len(all_task_ids) if all_task_ids else 0.0
+    print(f"\n--- Summary: mean_score={mean_score:.4f} ({sum(1 for s in results.values() if s >= 0.99)}/{len(all_task_ids)} solved) ---")
 
     # Save results
     with open("inference_results.json", "w") as f:
-        json.dump({"model": MODEL_NAME, "results": results}, f, indent=2)
-    print(f"\nResults saved to inference_results.json")
+        json.dump({"model": MODEL_NAME, "results": results, "mean_score": mean_score}, f, indent=2)
 
 
 if __name__ == "__main__":
