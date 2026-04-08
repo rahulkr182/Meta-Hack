@@ -95,6 +95,52 @@ async def schema():
     }
 
 
+@app.get("/metadata")
+async def metadata():
+    """Return environment metadata (name, description, version)."""
+    return {
+        "name": "sql-query-env",
+        "description": "An OpenEnv-compliant environment where AI agents learn to write SQL queries against database schemas.",
+        "version": "1.0.0",
+        "tasks": 9,
+        "difficulty_tiers": ["easy", "medium", "hard"],
+    }
+
+
+@app.post("/mcp")
+async def mcp(data: Dict[str, Any] = None):
+    """MCP JSON-RPC endpoint for OpenEnv compatibility."""
+    body = data or {}
+    method = body.get("method", "")
+    req_id = body.get("id", 1)
+
+    if method == "initialize":
+        result = {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "serverInfo": {"name": "sql-query-env", "version": "1.0.0"},
+        }
+    elif method == "tools/list":
+        result = {
+            "tools": [
+                {
+                    "name": "step",
+                    "description": "Submit a SQL query action to the environment",
+                    "inputSchema": SqlAction.model_json_schema(),
+                },
+                {
+                    "name": "reset",
+                    "description": "Reset the environment to a new task",
+                    "inputSchema": {"type": "object", "properties": {"task_id": {"type": "string"}}},
+                },
+            ]
+        }
+    else:
+        result = {"error": f"Unknown method: {method}"}
+
+    return {"jsonrpc": "2.0", "id": req_id, "result": result}
+
+
 @app.post("/reset")
 async def reset(data: Optional[Dict[str, Any]] = None):
     """Reset the environment. Accepts optional parameters in the body."""
