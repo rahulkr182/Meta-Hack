@@ -59,6 +59,26 @@ app.add_middleware(
 # REST Endpoints
 # ---------------------------------------------------------------------------
 
+@app.get("/")
+async def root():
+    """Root endpoint — environment info."""
+    return {
+        "name": "SQL Query Environment",
+        "spec": "OpenEnv v1",
+        "status": "running",
+        "tasks": 9,
+        "difficulty_tiers": ["easy", "medium", "hard"],
+        "endpoints": {
+            "health": "GET /health",
+            "schema": "GET /schema",
+            "state": "GET /state",
+            "reset": "POST /reset",
+            "step": "POST /step",
+            "websocket": "WS /ws",
+        },
+    }
+
+
 @app.get("/health")
 async def health():
     """Health check endpoint."""
