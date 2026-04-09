@@ -20,7 +20,7 @@ STDOUT FORMAT
 
     [START] task=<task_name> env=<benchmark> model=<model_name>
     [STEP]  step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
-    [END]   success=<true|false> steps=<n> score=<score> rewards=<r1,r2,...,rn>
+    [END]   success=<true|false> steps=<n> rewards=<r1,r2,...,rn>
 """
 
 import os
@@ -158,51 +158,67 @@ def run_task(env, task_id):
     # [START]
     print(f"[START] task={task_id} env={BENCHMARK} model={MODEL_NAME}")
 
-    obs = env.reset(task_id=task_id, seed=42)
-
     rewards = []
     step_count = 0
     best_reward = 0.0
-    prev_feedback = ""
-    last_error = None
 
-    for attempt in range(1, MAX_STEPS + 1):
-        step_count = attempt
+    try:
+        obs = env.reset(task_id=task_id, seed=42)
 
-        try:
-            sql_query = call_llm(
-                schema=obs.schema_description,
-                question=obs.question,
-                hint=task.hint,
-                attempt=attempt,
-                prev_feedback=prev_feedback,
-                difficulty=task.difficulty,
+        prev_feedback = ""
+        last_error = None
+
+        for attempt in range(1, MAX_STEPS + 1):
+            step_count = attempt
+
+            try:
+                sql_query = call_llm(
+                    schema=obs.schema_description,
+                    question=obs.question,
+                    hint=task.hint,
+                    attempt=attempt,
+                    prev_feedback=prev_feedback,
+                    difficulty=task.difficulty,
+                )
+                last_error = None
+            except Exception as e:
+                sql_query = "SELECT 1;"
+                last_error = str(e)
+
+            # Step
+            obs = env.step(SqlAction(sql_query=sql_query))
+            reward = obs.reward
+            rewards.append(reward)
+
+            if reward > best_reward:
+                best_reward = reward
+
+            done = obs.done
+
+            # Sanitize error and action for single-line output
+            error_str = last_error if last_error else (
+                obs.last_action_error if hasattr(obs, 'last_action_error') and obs.last_action_error else "null"
             )
-            last_error = None
-        except Exception as e:
-            sql_query = "SELECT 1;"
-            last_error = str(e)
+            error_str = str(error_str).replace('\n', ' ').replace('\r', '')
+            action_str = sql_query.replace('\n', ' ').replace('\r', '').strip()
 
-        # Step
-        obs = env.step(SqlAction(sql_query=sql_query))
-        reward = obs.reward
-        rewards.append(reward)
+            # [STEP]
+            print(f"[STEP] step={step_count} action={action_str} reward={reward:.2f} done={'true' if done else 'false'} error={error_str}")
 
-        if reward > best_reward:
-            best_reward = reward
+            if done:
+                break
 
-        done = obs.done
-        error_str = last_error if last_error else (obs.last_action_error if hasattr(obs, 'last_action_error') and obs.last_action_error else "null")
+            prev_feedback = obs.feedback
 
-        # [STEP]
-        print(f"[STEP] step={step_count} action={sql_query!r} reward={reward:.2f} done={'true' if done else 'false'} error={error_str}")
+    except Exception as e:
+        # Ensure [END] is always emitted even on exception
+        if not rewards:
+            rewards = [0.0]
+            step_count = 1
+        error_msg = str(e).replace('\n', ' ')
+        print(f"[STEP] step={step_count} action=ERROR reward=0.00 done=true error={error_msg}")
 
-        if done:
-            break
-
-        prev_feedback = obs.feedback
-
-    # [END] — spec format: success, steps, rewards (NO score field)
+    # [END] — always emitted
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
     success = best_reward >= 0.99
     print(f"[END] success={'true' if success else 'false'} steps={step_count} rewards={rewards_str}")
