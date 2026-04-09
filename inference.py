@@ -45,6 +45,9 @@ MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Meta-Llama-3.1-8B-Instruct")
 HF_TOKEN = os.getenv("HF_TOKEN")
 LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
 
+if HF_TOKEN is None:
+    raise ValueError("HF_TOKEN environment variable is required")
+
 BENCHMARK = "sql-query-env"
 MAX_STEPS = 3
 TEMPERATURE = 0.0
@@ -56,7 +59,7 @@ MAX_TOKENS = 512
 
 client = OpenAI(
     base_url=API_BASE_URL,
-    api_key=HF_TOKEN or "EMPTY",
+    api_key=HF_TOKEN,
 )
 
 # ---------------------------------------------------------------------------
@@ -199,23 +202,15 @@ def run_task(env, task_id):
 
         prev_feedback = obs.feedback
 
-    # Score normalized to [0, 1]
-    score = best_reward  # already in [0, 1]
-    success = score >= 0.99
+    # [END] — spec format: success, steps, rewards (NO score field)
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    success = best_reward >= 0.99
+    print(f"[END] success={'true' if success else 'false'} steps={step_count} rewards={rewards_str}")
 
-    # [END]
-    print(f"[END] success={'true' if success else 'false'} steps={step_count} score={score:.2f} rewards={rewards_str}")
-
-    return score
+    return best_reward
 
 
 def main():
-    if not HF_TOKEN:
-        print("ERROR: HF_TOKEN environment variable is not set.")
-        print("Set it with: export HF_TOKEN='hf_...'")
-        sys.exit(1)
-
     env = SqlEnvironment(max_attempts=MAX_STEPS)
     all_task_ids = sorted(get_all_task_ids())
 
