@@ -74,28 +74,52 @@ from sql_env.tasks import TASKS, get_all_task_ids
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT = textwrap.dedent("""
-You are an expert SQL query writer. You are given a database schema and a natural-language question.
-Write the correct SQL query that answers the question.
+You are an expert SQL query writer specializing in SQLite. You are given a database schema
+and a natural-language question. Write the correct SQL query that answers the question.
 
 Rules:
 - Output ONLY the SQL query, nothing else
-- Do NOT include markdown code fences
-- Do NOT include explanations
+- Do NOT include markdown code fences, explanations, or comments
 - Use standard SQLite-compatible SQL
+- Use explicit column names (never SELECT *)
+- Use table aliases for clarity (e.g., e for employees, d for departments)
+- Always include ORDER BY when the question mentions sorting or ranking
+- For aggregations, use meaningful column aliases with AS
+
+SQLite-specific notes:
+- Use strftime('%Y-%m', date_col) for month extraction
+- Use ROUND(value, 2) for decimal rounding
+- Window functions (RANK, ROW_NUMBER, LAG, SUM OVER) are supported
+- Use WITH RECURSIVE for recursive CTEs
+- Use CASE WHEN ... THEN ... ELSE ... END for conditional logic
+""").strip()
+
+FEW_SHOT_EXAMPLES = textwrap.dedent("""
+Example 1:
+Question: How many employees are in each department?
+SQL: SELECT d.name AS department, COUNT(e.id) AS emp_count FROM employees e JOIN departments d ON e.department_id = d.id GROUP BY d.id, d.name ORDER BY emp_count DESC;
+
+Example 2:
+Question: Find the running total of order amounts by date.
+SQL: SELECT order_date, total_amount, SUM(total_amount) OVER (ORDER BY order_date, id) AS running_total FROM orders ORDER BY order_date, id;
 """).strip()
 
 
-def build_user_prompt(schema, question, hint, attempt=1, prev_feedback=""):
-    prompt = f"Database Schema:\n{schema}\n\nQuestion: {question}\n\nHint: {hint}"
+def build_user_prompt(schema, question, hint, attempt=1, prev_feedback="", difficulty="easy"):
+    prompt = f"Database Schema:\n{schema}\n\nQuestion: {question}"
+    if hint and not hint.startswith("[BLIND"):
+        prompt += f"\n\nHint: {hint}"
+    if difficulty in ("hard", "expert"):
+        prompt += f"\n\n{FEW_SHOT_EXAMPLES}"
     if attempt > 1 and prev_feedback:
-        prompt += f"\n\nPrevious attempt feedback:\n{prev_feedback}\nPlease fix your query."
+        prompt += f"\n\nYour previous attempt got this feedback:\n{prev_feedback}\n\nFix the issues and try again."
     prompt += "\n\nSQL query:"
     return prompt
 
 
-def call_llm(schema, question, hint, attempt=1, prev_feedback=""):
+def call_llm(schema, question, hint, attempt=1, prev_feedback="", difficulty="easy"):
     """Call the LLM via OpenAI Client."""
-    user_msg = build_user_prompt(schema, question, hint, attempt, prev_feedback)
+    user_msg = build_user_prompt(schema, question, hint, attempt, prev_feedback, difficulty)
 
     response = client.chat.completions.create(
         model=MODEL_NAME,
@@ -149,6 +173,7 @@ def run_task(env, task_id):
                 hint=task.hint,
                 attempt=attempt,
                 prev_feedback=prev_feedback,
+                difficulty=task.difficulty,
             )
             last_error = None
         except Exception as e:

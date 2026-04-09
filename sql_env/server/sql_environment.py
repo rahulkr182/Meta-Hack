@@ -43,6 +43,7 @@ class SqlEnvironment:
         self._current_task: Optional[Task] = None
         self._db_conn = None
         self._last_observation: Optional[SqlObservation] = None
+        self._blind_mode: bool = False
 
     def reset(
         self,
@@ -50,6 +51,7 @@ class SqlEnvironment:
         episode_id: Optional[str] = None,
         task_id: Optional[str] = None,
         difficulty: Optional[str] = None,
+        blind_mode: Optional[bool] = None,
         **kwargs: Any,
     ) -> SqlObservation:
         """Reset the environment to a new episode.
@@ -81,6 +83,12 @@ class SqlEnvironment:
             self._current_task.seed_sql,
         )
 
+        # Blind mode: default to blind for expert tasks
+        if blind_mode is not None:
+            self._blind_mode = blind_mode
+        else:
+            self._blind_mode = self._current_task.difficulty == "expert"
+
         # Initialize state
         self._state = SqlState(
             episode_id=episode_id or str(uuid4()),
@@ -94,9 +102,20 @@ class SqlEnvironment:
             is_solved=False,
         )
 
+        # Schema description: hidden in blind mode
+        if self._blind_mode:
+            schema_desc = (
+                "[BLIND MODE] Schema is not provided. "
+                "Use queries like:\n"
+                "  SELECT name, sql FROM sqlite_master WHERE type='table';\n"
+                "to discover the database structure before answering."
+            )
+        else:
+            schema_desc = self._current_task.schema_sql.strip()
+
         # Build initial observation
         obs = SqlObservation(
-            schema_description=self._current_task.schema_sql.strip(),
+            schema_description=schema_desc,
             question=self._current_task.question,
             task_id=self._current_task.task_id,
             task_difficulty=self._current_task.difficulty,
@@ -104,7 +123,7 @@ class SqlEnvironment:
             execution_error=None,
             feedback=f"Task: {self._current_task.question}\n"
                      f"Difficulty: {self._current_task.difficulty}\n"
-                     f"Hint: {self._current_task.hint}\n"
+                     f"{'[BLIND MODE] Discover the schema first!' if self._blind_mode else 'Hint: ' + self._current_task.hint}\n"
                      f"You have {self._max_attempts} attempts. Submit a SQL query.",
             reward_breakdown={},
             done=False,
@@ -113,6 +132,7 @@ class SqlEnvironment:
                 "task_id": self._current_task.task_id,
                 "difficulty": self._current_task.difficulty,
                 "max_attempts": self._max_attempts,
+                "blind_mode": self._blind_mode,
             },
         )
         self._last_observation = obs
@@ -161,6 +181,7 @@ class SqlEnvironment:
             agent_sql=action.sql_query,
             task=self._current_task,
             conn=self._db_conn,
+            attempt=self._state.attempts,
         )
 
         reward = grade_result["total_reward"]

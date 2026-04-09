@@ -50,6 +50,22 @@ tasks:
     difficulty: hard
     description: "Cumulative total of order amounts"
     concepts: "SUM() OVER (running total)"
+  - id: expert_01
+    difficulty: expert
+    description: "Full management chain using recursive CTE"
+    concepts: "WITH RECURSIVE + self-JOIN"
+  - id: expert_02
+    difficulty: expert
+    description: "Department budget status classification"
+    concepts: "CASE + GROUP BY + conditional aggregation"
+  - id: expert_03
+    difficulty: expert
+    description: "Employees above department average salary"
+    concepts: "Correlated subquery / derived table"
+  - id: expert_04
+    difficulty: expert
+    description: "Monthly revenue growth percentage"
+    concepts: "CTE + LAG() window function"
 
 # Schemas
 action:
@@ -71,7 +87,7 @@ observation:
       type: string
     task_difficulty:
       type: string
-      enum: [easy, medium, hard]
+      enum: [easy, medium, hard, expert]
     execution_result:
       type: string
     execution_error:
@@ -116,6 +132,10 @@ reward:
     correct_columns: { weight: 0.15, description: "Selects the right columns" }
     partial_row_match: { weight: 0.20, description: "Jaccard similarity of result rows" }
     exact_match: { weight: 0.30, description: "Results exactly match gold standard" }
+  adjustments:
+    first_attempt_bonus: { value: 0.05, description: "Bonus for solving on first attempt" }
+    step_cost: { value: -0.02, description: "Penalty per attempt after the first" }
+    select_star_penalty: { column_credit: 0.30, description: "SELECT * gets only 30% column credit" }
 
 # Tags
 tags:
@@ -123,3 +143,5 @@ tags:
   - sql
   - rl-environment
   - agent-training
+  - schema-discovery
+  - multi-turn

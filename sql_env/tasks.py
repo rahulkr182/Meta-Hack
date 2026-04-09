@@ -376,6 +376,105 @@ _register(Task(
 ))
 
 
+# ============================= EXPERT ======================================
+
+_register(Task(
+    task_id="expert_01",
+    difficulty="expert",
+    question="Using a CTE (WITH clause), find the full management chain for each employee. Show the employee's first name, last name, and the number of management levels above them (0 for top-level managers). Sort by chain length descending, then by last name.",
+    hint="Use a recursive CTE with the manager_id column to walk up the management chain. Count the levels.",
+    gold_query="""
+        WITH RECURSIVE chain AS (
+            SELECT id, first_name, last_name, manager_id, 0 AS depth
+            FROM employees
+            WHERE manager_id IS NULL
+            UNION ALL
+            SELECT e.id, e.first_name, e.last_name, e.manager_id, c.depth + 1
+            FROM employees e
+            JOIN chain c ON e.manager_id = c.id
+        )
+        SELECT first_name, last_name, depth
+        FROM chain
+        ORDER BY depth DESC, last_name;
+    """,
+))
+
+_register(Task(
+    task_id="expert_02",
+    difficulty="expert",
+    question="For each department, calculate: the number of employees, average salary, and classify the department as 'Over Budget' if total salaries exceed the department budget, or 'Within Budget' otherwise. Show department name, employee count, average salary (rounded to 2 decimals), total salary, budget, and budget status. Sort by department name.",
+    hint="Use CASE expression with GROUP BY. Join employees with departments and compare SUM(salary) to budget.",
+    gold_query="""
+        SELECT
+            d.name AS department,
+            COUNT(e.id) AS emp_count,
+            ROUND(AVG(e.salary), 2) AS avg_salary,
+            SUM(e.salary) AS total_salary,
+            d.budget,
+            CASE
+                WHEN SUM(e.salary) > d.budget THEN 'Over Budget'
+                ELSE 'Within Budget'
+            END AS budget_status
+        FROM departments d
+        JOIN employees e ON e.department_id = d.id
+        GROUP BY d.id, d.name, d.budget
+        ORDER BY d.name;
+    """,
+))
+
+_register(Task(
+    task_id="expert_03",
+    difficulty="expert",
+    question="Find employees whose salary is above the average salary of their own department. Show the employee's first name, last name, their salary, their department name, and the department average salary (rounded to 2 decimals). Sort by department name, then by salary descending.",
+    hint="Use a correlated subquery or a CTE/subquery that computes per-department average, then filter employees above it.",
+    gold_query="""
+        SELECT
+            e.first_name,
+            e.last_name,
+            e.salary,
+            d.name AS department,
+            ROUND(dept_avg.avg_sal, 2) AS dept_avg_salary
+        FROM employees e
+        JOIN departments d ON e.department_id = d.id
+        JOIN (
+            SELECT department_id, AVG(salary) AS avg_sal
+            FROM employees
+            GROUP BY department_id
+        ) dept_avg ON e.department_id = dept_avg.department_id
+        WHERE e.salary > dept_avg.avg_sal
+        ORDER BY d.name, e.salary DESC;
+    """,
+))
+
+_register(Task(
+    task_id="expert_04",
+    difficulty="expert",
+    question="Analyze monthly order trends: for each month that has orders, show the month (as YYYY-MM), the number of orders, total revenue, and the percentage change in revenue compared to the previous month (NULL for the first month). Round the percentage to 2 decimal places. Sort by month.",
+    hint="Use strftime to extract month, window functions LAG() to get previous month's revenue, then calculate percentage change.",
+    gold_query="""
+        WITH monthly AS (
+            SELECT
+                strftime('%Y-%m', order_date) AS month,
+                COUNT(*) AS order_count,
+                SUM(total_amount) AS revenue
+            FROM orders
+            GROUP BY strftime('%Y-%m', order_date)
+        )
+        SELECT
+            month,
+            order_count,
+            revenue,
+            ROUND(
+                (revenue - LAG(revenue) OVER (ORDER BY month)) * 100.0
+                / LAG(revenue) OVER (ORDER BY month),
+                2
+            ) AS revenue_growth_pct
+        FROM monthly
+        ORDER BY month;
+    """,
+))
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

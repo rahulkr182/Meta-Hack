@@ -10,6 +10,10 @@ Scoring Components:
     - Correct columns    (0.15): Selects the right column(s)
     - Partial row match  (0.20): Jaccard similarity of result rows
     - Exact match        (0.30): Results exactly match gold (order-insensitive)
+
+Adjustments:
+    - Step cost: -0.02 per attempt after the first (incentivizes efficiency)
+    - First-attempt bonus: +0.05 if solved on first try
 """
 
 import re
@@ -126,6 +130,7 @@ def grade_query(
     agent_sql: str,
     task: Task,
     conn: sqlite3.Connection,
+    attempt: int = 1,
 ) -> Dict[str, Any]:
     """Grade an agent's SQL query against the gold standard.
 
@@ -207,8 +212,8 @@ def grade_query(
     if gold_cols_parsed and agent_cols_parsed:
         if "*" in agent_cols_parsed and "*" not in gold_cols_parsed:
             # SELECT * gets partial credit
-            breakdown["correct_columns"] = 0.5
-            feedback_parts.append("◐ Using SELECT * — try selecting specific columns")
+            breakdown["correct_columns"] = 0.3
+            feedback_parts.append("◐ Using SELECT * — select specific columns for full credit")
         elif "*" in gold_cols_parsed and "*" in agent_cols_parsed:
             breakdown["correct_columns"] = 1.0
             feedback_parts.append("✓ Correct column selection")
@@ -281,7 +286,20 @@ def grade_query(
     total = sum(
         breakdown[key] * WEIGHTS[key] for key in WEIGHTS
     )
-    total = round(total, 4)
+
+    # Step cost: penalize later attempts to incentivize efficiency
+    step_penalty = max(0, (attempt - 1)) * 0.02
+    total = max(0.0, total - step_penalty)
+
+    # First-attempt bonus for exact matches
+    is_exact = breakdown.get("exact_match", 0.0) >= 1.0
+    if is_exact and attempt == 1:
+        total = min(1.0, total + 0.05)
+        feedback_parts.append("🏆 First-attempt solve bonus! +0.05")
+    elif step_penalty > 0:
+        feedback_parts.append(f"⏱️ Efficiency penalty: -{step_penalty:.2f} (attempt {attempt})")
+
+    total = round(min(1.0, total), 4)
 
     feedback = "\n".join(feedback_parts)
 

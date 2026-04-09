@@ -1,6 +1,6 @@
 # 🧠 SQL Query Environment — OpenEnv
 
-> An AI agent learns to write SQL queries from natural language. Built on [OpenEnv](https://github.com/meta-pytorch/OpenEnv).
+> An AI agent learns to write SQL queries from natural language — with schema discovery, multi-turn correction, and progressive difficulty. Built on [OpenEnv](https://github.com/meta-pytorch/OpenEnv).
 
 [![OpenEnv Spec](https://img.shields.io/badge/OpenEnv-v1.0-blue)](https://github.com/meta-pytorch/OpenEnv)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
@@ -20,8 +20,9 @@ This simulates a genuinely useful real-world skill — data analysts and enginee
 |---|---|
 | Real-world task | SQL querying is one of the most common data tasks |
 | Objectively gradable | Execute the query, compare results row-by-row |
-| Natural difficulty tiers | Simple SELECT → JOINs → Window functions |
-| Rich partial signals | 6-component reward: syntax, execution, tables, columns, partial match, exact match |
+| Natural difficulty tiers | Simple SELECT → JOINs → Window functions → CTEs + correlated subqueries |
+| Rich partial signals | 6-component reward + step cost + first-attempt bonus |
+| Novel mechanics | **Blind mode** — agent must discover schema before querying |
 | No external dependencies | SQLite runs in-process — fully reproducible |
 
 ---
@@ -148,7 +149,7 @@ print(obs.feedback)  # Detailed grading breakdown
 
 ---
 
-## 📊 Tasks (3 Difficulty Tiers × 3 Tasks)
+## 📊 Tasks (4 Difficulty Tiers × 13 Tasks)
 
 ### Easy (Simple SELECT + WHERE)
 
@@ -174,6 +175,15 @@ print(obs.feedback)  # Detailed grading breakdown
 | `hard_02` | Products never ordered | LEFT JOIN + IS NULL |
 | `hard_03` | Cumulative total of daily revenue | SUM() OVER (running total) |
 
+### Expert (CTEs + Correlated Subqueries + Multi-step Analysis) 🔥
+
+| ID | Question | SQL Concepts |
+|----|----------|-------------|
+| `expert_01` | Full management chain per employee | Recursive CTE (WITH RECURSIVE) |
+| `expert_02` | Department budget status classification | CASE + GROUP BY + conditional aggregation |
+| `expert_03` | Employees above their department average | Correlated subquery / derived table |
+| `expert_04` | Monthly revenue growth percentage | CTE + LAG() window function |
+
 ---
 
 ## 🏆 Reward Function
@@ -190,6 +200,14 @@ The grader uses a **6-component scoring rubric** with meaningful partial progres
 | **Exact match** | 0.30 | Results exactly match gold standard |
 
 **Total = Σ (component_score × weight)** → 0.0 to 1.0
+
+#### Adjustments
+
+| Modifier | Value | Description |
+|----------|-------|-------------|
+| 🏆 First-attempt bonus | +0.05 | Rewarded for solving on first try |
+| ⏱️ Step cost | -0.02/attempt | Penalty for each extra attempt after the first |
+| SELECT * penalty | 0.30 | Using `SELECT *` only gets 30% column credit |
 
 ### Partial Progress Example
 
@@ -324,21 +342,22 @@ Meta-Hack/
 ├── sql_env/
 │   ├── __init__.py              # Package exports
 │   ├── models.py                # Action, Observation, State (Pydantic)
-│   ├── tasks.py                 # 9 tasks with schema, seed data, gold queries
-│   ├── grader.py                # 6-component scoring with partial credit
+│   ├── tasks.py                 # 13 tasks with schema, seed data, gold queries
+│   ├── grader.py                # 6-component scoring + step cost + first-attempt bonus
 │   ├── db_utils.py              # SQLite helpers (create, query, format)
 │   ├── client.py                # HTTP + WebSocket clients
 │   ├── openenv.yaml             # OpenEnv manifest
 │   └── server/
-│       ├── sql_environment.py   # Environment (reset/step/state)
+│       ├── sql_environment.py   # Environment (reset/step/state + blind mode)
 │       ├── app.py               # FastAPI server (REST + WebSocket)
 │       ├── requirements.txt     # Docker dependencies
 │       └── Dockerfile           # Container image
+├── inference.py                 # Hackathon submission inference script
 ├── baseline_inference.py        # Deterministic baseline script
 ├── llm_inference.py             # LLM-based inference (OpenAI/Together/HF)
 ├── run_evaluation.py            # Gold verification + partial credit demo
 ├── tests/
-│   └── test_sql_env.py          # 23 unit tests
+│   └── test_sql_env.py          # Unit tests
 ├── Dockerfile                   # Top-level Docker build
 ├── pyproject.toml               # Project configuration
 └── README.md                    # This file
