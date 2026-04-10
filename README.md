@@ -1,3 +1,12 @@
+---
+title: SQL Query Environment
+emoji: 🧠
+colorFrom: blue
+colorTo: purple
+sdk: docker
+app_port: 7860
+---
+
 # 🧠 SQL Query Environment — OpenEnv
 
 > An AI agent learns to write SQL queries from natural language — with schema discovery, multi-turn correction, and progressive difficulty. Built on [OpenEnv](https://github.com/meta-pytorch/OpenEnv).
