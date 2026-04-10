@@ -18,7 +18,7 @@ def create_database(schema_sql: str, seed_sql: str) -> sqlite3.Connection:
     Returns:
         A sqlite3.Connection to the in-memory database.
     """
-    conn = sqlite3.connect(":memory:")
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.executescript(schema_sql)
     conn.executescript(seed_sql)

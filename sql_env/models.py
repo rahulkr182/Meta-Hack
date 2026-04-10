@@ -1,48 +1,29 @@
-"""Typed models for the SQL Query Environment.
+"""
+Data models for the SQL Query Environment.
 
-Defines the Action, Observation, and State types used by the environment,
-client, and grader. All models use Pydantic for validation and serialization.
+The sql_query_env environment provides SQL query writing tasks against
+in-memory SQLite databases. The agent submits SQL queries and receives
+graded feedback with partial-progress reward signals.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from openenv.core.env_server.types import Action, Observation, State
+from pydantic import Field
 
 
-# ---------------------------------------------------------------------------
-# Action
-# ---------------------------------------------------------------------------
-
-class SqlAction(BaseModel):
+class SqlAction(Action):
     """Action submitted by the agent: a SQL query string."""
-
-    model_config = ConfigDict(
-        extra="forbid",
-        validate_assignment=True,
-    )
 
     sql_query: str = Field(
         ...,
         description="The SQL query the agent wants to execute against the database.",
         min_length=1,
     )
-    metadata: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="Optional metadata for the action.",
-    )
 
 
-# ---------------------------------------------------------------------------
-# Observation
-# ---------------------------------------------------------------------------
-
-class SqlObservation(BaseModel):
+class SqlObservation(Observation):
     """Observation returned to the agent after reset() or step()."""
-
-    model_config = ConfigDict(
-        extra="forbid",
-        validate_assignment=True,
-    )
 
     # Task context (always present)
     schema_description: str = Field(
@@ -56,13 +37,13 @@ class SqlObservation(BaseModel):
     task_id: str = Field(default="", description="ID of the current task.")
     task_difficulty: str = Field(
         default="easy",
-        description="Difficulty tier: 'easy', 'medium', or 'hard'.",
+        description="Difficulty tier: 'easy', 'medium', 'hard', or 'expert'.",
     )
 
     # Step feedback (populated after step(), empty after reset())
     execution_result: Optional[str] = Field(
         default=None,
-        description="Stringified result of executing the agent's SQL, or the error message.",
+        description="Stringified result of executing the agent's SQL.",
     )
     execution_error: Optional[str] = Field(
         default=None,
@@ -77,33 +58,10 @@ class SqlObservation(BaseModel):
         description="Per-component reward breakdown from the grader.",
     )
 
-    # Standard OpenEnv fields
-    done: bool = Field(default=False, description="Whether the episode has ended.")
-    reward: Optional[float] = Field(
-        default=None, description="Reward for this step (0.0–1.0)."
-    )
-    metadata: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="Additional metadata.",
-    )
 
-
-# ---------------------------------------------------------------------------
-# State
-# ---------------------------------------------------------------------------
-
-class SqlState(BaseModel):
+class SqlState(State):
     """Internal state of the SQL environment episode."""
 
-    model_config = ConfigDict(
-        extra="allow",
-        validate_assignment=True,
-    )
-
-    episode_id: Optional[str] = Field(
-        default=None, description="Unique identifier for this episode."
-    )
-    step_count: int = Field(default=0, ge=0, description="Steps taken so far.")
     current_task_id: str = Field(default="", description="Current task ID.")
     task_difficulty: str = Field(default="easy", description="Current task difficulty.")
     attempts: int = Field(default=0, ge=0, description="Attempts used on this task.")

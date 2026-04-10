@@ -1,264 +1,74 @@
-"""FastAPI application for the SQL Query Environment.
+"""
+FastAPI application for the SQL Query Environment.
 
-Creates the HTTP server with REST and WebSocket endpoints following
-the OpenEnv specification.
+This module creates an HTTP server that exposes the SqlEnvironment
+over HTTP and WebSocket endpoints, compatible with EnvClient.
+
+Endpoints:
+    - POST /reset: Reset the environment
+    - POST /step: Execute an action
+    - GET /state: Get current environment state
+    - GET /schema: Get action/observation schemas
+    - WS /ws: WebSocket endpoint for persistent sessions
+
+Usage:
+    # Development (with auto-reload):
+    uvicorn server.app:app --reload --host 0.0.0.0 --port 7860
+
+    # Production:
+    uvicorn server.app:app --host 0.0.0.0 --port 7860 --workers 4
+
+    # Or run directly:
+    python -m server.app
 """
 
-import json
-import logging
-from contextlib import asynccontextmanager
-from typing import Any, Dict, Optional
+try:
+    from openenv.core.env_server.http_server import create_app
+except Exception as e:  # pragma: no cover
+    raise ImportError(
+        "openenv is required for the web interface. "
+        "Install with: pip install openenv-core[core]"
+    ) from e
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
+# Import from local models.py (PYTHONPATH includes /app in Docker)
+try:
+    from models import SqlAction, SqlObservation
+except ImportError:
+    from ..models import SqlAction, SqlObservation
 
-from sql_env.models import SqlAction, SqlObservation, SqlState
-from sql_env.server.sql_environment import SqlEnvironment
-
-logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Application lifespan
-# ---------------------------------------------------------------------------
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Manage application startup and shutdown."""
-    logger.info("SQL Query Environment starting up...")
-    yield
-    logger.info("SQL Query Environment shutting down...")
-    env.close()
+from .sql_environment import SqlEnvironment
 
 
-# ---------------------------------------------------------------------------
-# Create app and environment
-# ---------------------------------------------------------------------------
-
-env = SqlEnvironment(max_attempts=3)
-
-app = FastAPI(
-    title="SQL Query Environment",
-    description=(
-        "An OpenEnv-compliant environment where AI agents learn to write "
-        "SQL queries against database schemas."
-    ),
-    version="1.0.0",
-    lifespan=lifespan,
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+# Create the app with web interface
+app = create_app(
+    SqlEnvironment,
+    SqlAction,
+    SqlObservation,
+    env_name="sql_query_env",
+    max_concurrent_envs=8,
 )
 
 
-# ---------------------------------------------------------------------------
-# REST Endpoints
-# ---------------------------------------------------------------------------
+def main(host: str = "0.0.0.0", port: int = 7860):
+    """
+    Entry point for direct execution.
 
-@app.get("/")
-async def root():
-    """Root endpoint — environment info."""
-    return {
-        "name": "SQL Query Environment",
-        "spec": "OpenEnv v1",
-        "status": "running",
-        "tasks": 9,
-        "difficulty_tiers": ["easy", "medium", "hard"],
-        "endpoints": {
-            "health": "GET /health",
-            "schema": "GET /schema",
-            "state": "GET /state",
-            "reset": "POST /reset",
-            "step": "POST /step",
-            "websocket": "WS /ws",
-        },
-    }
+    This function enables running the server without Docker:
+        python -m sql_env.server.app
 
+    Args:
+        host: Host address to bind to (default: "0.0.0.0")
+        port: Port number to listen on (default: 7860)
+    """
+    import uvicorn
 
-@app.get("/health")
-async def health():
-    """Health check endpoint."""
-    return {"status": "healthy"}
+    uvicorn.run(app, host=host, port=port)
 
-
-@app.get("/schema")
-async def schema():
-    """Return the JSON schemas for Action, Observation, and State."""
-    return {
-        "action": SqlAction.model_json_schema(),
-        "observation": SqlObservation.model_json_schema(),
-        "state": SqlState.model_json_schema(),
-    }
-
-
-@app.get("/metadata")
-async def metadata():
-    """Return environment metadata (name, description, version)."""
-    return {
-        "name": "sql-query-env",
-        "description": "An OpenEnv-compliant environment where AI agents learn to write SQL queries against database schemas.",
-        "version": "1.0.0",
-        "tasks": 9,
-        "difficulty_tiers": ["easy", "medium", "hard"],
-    }
-
-
-@app.post("/mcp")
-async def mcp(data: Dict[str, Any] = None):
-    """MCP JSON-RPC endpoint for OpenEnv compatibility."""
-    body = data or {}
-    method = body.get("method", "")
-    req_id = body.get("id", 1)
-
-    if method == "initialize":
-        result = {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "serverInfo": {"name": "sql-query-env", "version": "1.0.0"},
-        }
-    elif method == "tools/list":
-        result = {
-            "tools": [
-                {
-                    "name": "step",
-                    "description": "Submit a SQL query action to the environment",
-                    "inputSchema": SqlAction.model_json_schema(),
-                },
-                {
-                    "name": "reset",
-                    "description": "Reset the environment to a new task",
-                    "inputSchema": {"type": "object", "properties": {"task_id": {"type": "string"}}},
-                },
-            ]
-        }
-    else:
-        result = {"error": f"Unknown method: {method}"}
-
-    return {"jsonrpc": "2.0", "id": req_id, "result": result}
-
-
-@app.post("/reset")
-async def reset(data: Optional[Dict[str, Any]] = None):
-    """Reset the environment. Accepts optional parameters in the body."""
-    params = data or {}
-    obs = env.reset(**params)
-    return {
-        "observation": obs.model_dump(),
-        "reward": obs.reward,
-        "done": obs.done,
-        "info": obs.metadata,
-    }
-
-
-@app.post("/step")
-async def step(data: Dict[str, Any]):
-    """Execute a step with the given action."""
-    action = SqlAction(**data.get("action", data))
-    obs = env.step(action)
-    return {
-        "observation": obs.model_dump(),
-        "reward": obs.reward,
-        "done": obs.done,
-        "info": obs.metadata,
-    }
-
-
-@app.get("/state")
-async def state():
-    """Get the current environment state."""
-    return env.state.model_dump()
-
-
-# ---------------------------------------------------------------------------
-# WebSocket Endpoint (OpenEnv standard)
-# ---------------------------------------------------------------------------
-
-@app.websocket("/ws")
-async def websocket_endpoint(ws: WebSocket):
-    """WebSocket endpoint for real-time environment interaction."""
-    await ws.accept()
-    logger.info("WebSocket client connected")
-
-    try:
-        while True:
-            raw = await ws.receive_text()
-            try:
-                msg = json.loads(raw)
-            except json.JSONDecodeError:
-                await ws.send_json({
-                    "type": "error",
-                    "data": {"message": "Invalid JSON", "code": "INVALID_JSON"},
-                })
-                continue
-
-            msg_type = msg.get("type", "")
-
-            if msg_type == "reset":
-                params = msg.get("data", {})
-                obs = env.reset(**params)
-                await ws.send_json({
-                    "type": "observation",
-                    "data": obs.model_dump(),
-                })
-
-            elif msg_type == "step":
-                try:
-                    action_data = msg.get("data", {})
-                    action = SqlAction(**action_data)
-                    obs = env.step(action)
-                    await ws.send_json({
-                        "type": "observation",
-                        "data": obs.model_dump(),
-                    })
-                except Exception as e:
-                    await ws.send_json({
-                        "type": "error",
-                        "data": {
-                            "message": str(e),
-                            "code": "EXECUTION_ERROR",
-                        },
-                    })
-
-            elif msg_type == "state":
-                await ws.send_json({
-                    "type": "state",
-                    "data": env.state.model_dump(),
-                })
-
-            elif msg_type == "close":
-                await ws.close()
-                break
-
-            else:
-                await ws.send_json({
-                    "type": "error",
-                    "data": {
-                        "message": f"Unknown message type: {msg_type}",
-                        "code": "UNKNOWN_TYPE",
-                    },
-                })
-
-    except WebSocketDisconnect:
-        logger.info("WebSocket client disconnected")
-    except Exception as e:
-        logger.error(f"WebSocket error: {e}")
-        try:
-            await ws.send_json({
-                "type": "error",
-                "data": {"message": str(e), "code": "EXECUTION_ERROR"},
-            })
-        except Exception:
-            pass
-
-
-# ---------------------------------------------------------------------------
-# Run with: uvicorn sql_env.server.app:app --host 0.0.0.0 --port 8000
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=7860)
+    args = parser.parse_args()
+    main(port=args.port)

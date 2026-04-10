@@ -169,3 +169,7 @@ class SqlEnvAsyncClient:
 
     async def __aexit__(self, *args):
         await self.close()
+
+
+# Convenience alias (exported from __init__.py)
+SqlEnv = SqlEnvClient

@@ -1,36 +1,48 @@
-"""SQL Query Environment — Server-side implementation.
+"""
+SQL Query Environment Implementation.
 
-Implements the OpenEnv Environment interface (reset/step/state) for the
-SQL query writing task. Manages an in-memory SQLite database per episode
-and uses the grader for scoring.
+Manages an in-memory SQLite database per episode. The agent submits SQL queries,
+which are executed and graded against gold-standard answers.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 from uuid import uuid4
+
+from openenv.core.env_server.interfaces import Environment
+from openenv.core.env_server.types import State
 
 from sql_env.db_utils import create_database, execute_query, format_results
 from sql_env.grader import grade_query
-from sql_env.models import SqlAction, SqlObservation, SqlState
 from sql_env.tasks import Task, get_random_task, get_task, TASKS
 
+try:
+    from models import SqlAction, SqlObservation, SqlState
+except ImportError:
+    from ..models import SqlAction, SqlObservation, SqlState
 
-class SqlEnvironment:
-    """OpenEnv-compliant SQL query writing environment.
 
-    The agent receives a database schema and a natural-language question,
-    then submits SQL queries. The environment executes them against an
-    in-memory SQLite database and returns graded feedback with partial
-    reward signals.
-
-    Lifecycle:
-        1. reset() — picks a task, creates a fresh DB, returns schema + question
-        2. step(action) — executes the agent's SQL, grades it, returns feedback
-        3. state — returns the current episode state
-
-    The episode ends when:
-        - The agent achieves a perfect score (exact match), or
-        - The agent exhausts all attempts (default: 3)
+class SqlEnvironment(Environment):
     """
+    OpenEnv-compliant SQL query writing environment.
+
+    Each episode presents a database schema and a natural-language question.
+    The agent submits SQL queries which are executed against an in-memory
+    SQLite database. Graded feedback with partial reward signals is returned.
+
+    Design:
+    - Multi-step episodes: reset() provides task, step() validates SQL
+    - Episode ends on: exact match OR max attempts exhausted
+    - Blind mode for expert tasks: schema is hidden
+
+    Example:
+        >>> env = SqlEnvironment()
+        >>> obs = env.reset(task_id='easy_01')
+        >>> print(obs.question)
+        >>> obs = env.step(SqlAction(sql_query="SELECT ..."))
+        >>> print(obs.reward, obs.done)
+    """
+
+    SUPPORTS_CONCURRENT_SESSIONS: bool = True
 
     def __init__(self, max_attempts: int = 3):
         """Initialize the environment.
@@ -39,7 +51,7 @@ class SqlEnvironment:
             max_attempts: Maximum number of attempts per task.
         """
         self._max_attempts = max_attempts
-        self._state = SqlState()
+        self._state = SqlState(episode_id=str(uuid4()), step_count=0)
         self._current_task: Optional[Task] = None
         self._db_conn = None
         self._last_observation: Optional[SqlObservation] = None
@@ -61,6 +73,7 @@ class SqlEnvironment:
             episode_id: Custom episode ID (auto-generated if not provided).
             task_id: Specific task ID to use (overrides difficulty).
             difficulty: Filter task selection by difficulty tier.
+            blind_mode: If True, hide schema from agent.
             **kwargs: Additional reset parameters.
 
         Returns:
@@ -138,18 +151,11 @@ class SqlEnvironment:
         self._last_observation = obs
         return obs
 
-    def step(
-        self,
-        action: SqlAction,
-        timeout_s: Optional[float] = None,
-        **kwargs: Any,
-    ) -> SqlObservation:
+    def step(self, action: SqlAction) -> SqlObservation:  # type: ignore[override]
         """Execute the agent's SQL query and return graded feedback.
 
         Args:
             action: SqlAction containing the agent's SQL query.
-            timeout_s: Optional timeout (unused, SQLite is fast).
-            **kwargs: Additional arguments.
 
         Returns:
             Observation with execution results, reward, and feedback.
@@ -219,7 +225,6 @@ class SqlEnvironment:
             feedback_lines.append(
                 f"\n❌ Out of attempts. Best reward: {self._state.best_reward:.4f}"
             )
-            # Show the gold query on final failure
             feedback_lines.append(
                 f"\nCorrect query was:\n{self._current_task.gold_query.strip()}"
             )

@@ -17,14 +17,14 @@ from sql_env.server.sql_environment import SqlEnvironment
 
 class TestTasks:
     def test_all_tasks_registered(self):
-        """All 9 tasks should be registered."""
-        assert len(TASKS) == 9
+        """All 13 tasks should be registered."""
+        assert len(TASKS) == 13
 
     def test_difficulty_distribution(self):
-        """3 tasks per difficulty tier."""
-        for diff in ("easy", "medium", "hard"):
+        """3 tasks per difficulty tier (4 for expert)."""
+        for diff, expected in (("easy", 3), ("medium", 3), ("hard", 3), ("expert", 4)):
             tasks = get_tasks_by_difficulty(diff)
-            assert len(tasks) == 3, f"Expected 3 {diff} tasks, got {len(tasks)}"
+            assert len(tasks) == expected, f"Expected {expected} {diff} tasks, got {len(tasks)}"
 
     def test_get_task_by_id(self):
         task = get_task("easy_01")

@@ -156,7 +156,7 @@ def run_task(env, task_id):
     task = TASKS[task_id]
 
     # [START]
-    print(f"[START] task={task_id} env={BENCHMARK} model={MODEL_NAME}")
+    print(f"[START] task={task_id} env={BENCHMARK} model={MODEL_NAME}", flush=True)
 
     rewards = []
     step_count = 0
@@ -197,13 +197,13 @@ def run_task(env, task_id):
 
             # Sanitize error and action for single-line output
             error_str = last_error if last_error else (
-                obs.last_action_error if hasattr(obs, 'last_action_error') and obs.last_action_error else "null"
+                obs.execution_error if obs.execution_error else "null"
             )
             error_str = str(error_str).replace('\n', ' ').replace('\r', '')
             action_str = sql_query.replace('\n', ' ').replace('\r', '').strip()
 
             # [STEP]
-            print(f"[STEP] step={step_count} action={action_str} reward={reward:.2f} done={'true' if done else 'false'} error={error_str}")
+            print(f"[STEP] step={step_count} action={action_str} reward={reward:.2f} done={'true' if done else 'false'} error={error_str}", flush=True)
 
             if done:
                 break
@@ -216,12 +216,12 @@ def run_task(env, task_id):
             rewards = [0.0]
             step_count = 1
         error_msg = str(e).replace('\n', ' ')
-        print(f"[STEP] step={step_count} action=ERROR reward=0.00 done=true error={error_msg}")
+        print(f"[STEP] step={step_count} action=ERROR reward=0.00 done=true error={error_msg}", flush=True)
 
     # [END] — always emitted
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
     success = best_reward >= 0.99
-    print(f"[END] success={'true' if success else 'false'} steps={step_count} rewards={rewards_str}")
+    print(f"[END] success={'true' if success else 'false'} steps={step_count} rewards={rewards_str}", flush=True)
 
     return best_reward
 

@@ -10,3 +10,4 @@ baseline_results.json
 llm_inference_results.json
 .gemini/
 .venv/
+.uv/
