@@ -19,7 +19,7 @@ Usage:
     uvicorn server.app:app --host 0.0.0.0 --port 7860 --workers 4
 
     # Or run directly:
-    python -m server.app
+    python server/app.py
 """
 
 import os
@@ -30,27 +30,32 @@ _repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
-from openenv.core.env_server.http_server import create_app
+# Lazy app creation — validator may not have openenv installed
+app = None
 
 try:
-    from models import SqlAction, SqlObservation
-except ImportError:
-    from sql_env.models import SqlAction, SqlObservation
+    from openenv.core.env_server.http_server import create_app
 
-try:
-    from server.sql_environment import SqlEnvironment
-except ImportError:
-    from sql_env.server.sql_environment import SqlEnvironment
+    try:
+        from models import SqlAction, SqlObservation
+    except ImportError:
+        from sql_env.models import SqlAction, SqlObservation
 
+    try:
+        from server.sql_environment import SqlEnvironment
+    except ImportError:
+        from sql_env.server.sql_environment import SqlEnvironment
 
-# Create the app with web interface
-app = create_app(
-    SqlEnvironment,
-    SqlAction,
-    SqlObservation,
-    env_name="sql_query_env",
-    max_concurrent_envs=8,
-)
+    app = create_app(
+        SqlEnvironment,
+        SqlAction,
+        SqlObservation,
+        env_name="sql_query_env",
+        max_concurrent_envs=8,
+    )
+except Exception:
+    # App creation deferred to main() if top-level import fails
+    pass
 
 
 def main(host: str = "0.0.0.0", port: int = 7860):
@@ -65,9 +70,24 @@ def main(host: str = "0.0.0.0", port: int = 7860):
         host: Host address to bind to (default: "0.0.0.0")
         port: Port number to listen on (default: 7860)
     """
+    global app
+
+    if app is None:
+        from openenv.core.env_server.http_server import create_app
+        from sql_env.models import SqlAction, SqlObservation
+        from sql_env.server.sql_environment import SqlEnvironment
+
+        app = create_app(
+            SqlEnvironment,
+            SqlAction,
+            SqlObservation,
+            env_name="sql_query_env",
+            max_concurrent_envs=8,
+        )
+
     import uvicorn
 
-    uvicorn.run("server.app:app", host=host, port=port)
+    uvicorn.run(app, host=host, port=port)
 
 
 if __name__ == "__main__":
