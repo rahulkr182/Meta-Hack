@@ -22,10 +22,25 @@ Usage:
     python -m server.app
 """
 
+import os
+import sys
+
+# Ensure the repo root is on sys.path so sql_env can be imported
+_repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+
 from openenv.core.env_server.http_server import create_app
 
-from sql_env.models import SqlAction, SqlObservation
-from sql_env.server.sql_environment import SqlEnvironment
+try:
+    from models import SqlAction, SqlObservation
+except ImportError:
+    from sql_env.models import SqlAction, SqlObservation
+
+try:
+    from server.sql_environment import SqlEnvironment
+except ImportError:
+    from sql_env.server.sql_environment import SqlEnvironment
 
 
 # Create the app with web interface
@@ -42,7 +57,8 @@ def main(host: str = "0.0.0.0", port: int = 7860):
     """
     Entry point for direct execution.
 
-    This function enables running the server without Docker:
+    This function enables running the server:
+        python server/app.py
         python -m server.app
 
     Args:
@@ -51,7 +67,7 @@ def main(host: str = "0.0.0.0", port: int = 7860):
     """
     import uvicorn
 
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run("server.app:app", host=host, port=port)
 
 
 if __name__ == "__main__":
@@ -59,5 +75,6 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=7860)
+    parser.add_argument("--host", type=str, default="0.0.0.0")
     args = parser.parse_args()
-    main(port=args.port)
+    main(host=args.host, port=args.port)

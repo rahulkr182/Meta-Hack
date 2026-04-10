@@ -1,1 +1,1 @@
-# Server package - re-exports from sql_env.server
+"""SQL Query environment server package."""
