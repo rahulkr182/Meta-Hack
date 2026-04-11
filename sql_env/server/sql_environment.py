@@ -140,7 +140,7 @@ class SqlEnvironment(Environment):
                      f"You have {self._max_attempts} attempts. Submit a SQL query.",
             reward_breakdown={},
             done=False,
-            reward=0.001,
+            reward=0.01,
             metadata={
                 "task_id": self._current_task.task_id,
                 "difficulty": self._current_task.difficulty,
@@ -164,7 +164,7 @@ class SqlEnvironment(Environment):
             return SqlObservation(
                 feedback="ERROR: Environment not initialized. Call reset() first.",
                 done=True,
-                reward=0.001,
+                reward=0.01,
             )
 
         if self._state.is_solved:
@@ -175,7 +175,7 @@ class SqlEnvironment(Environment):
                 task_difficulty=self._current_task.difficulty,
                 feedback="Task already solved! Call reset() to try a new task.",
                 done=True,
-                reward=0.001,
+                reward=0.01,
             )
 
         # Increment counters

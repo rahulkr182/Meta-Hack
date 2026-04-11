@@ -188,7 +188,7 @@ def run_task(env, task_id):
             # Step
             obs = env.step(SqlAction(sql_query=sql_query))
             # Clamp reward to strictly (0, 1) — evaluator rejects 0.0 and 1.0
-            reward = max(0.001, min(0.999, obs.reward))
+            reward = max(0.01, min(0.99, obs.reward))
             rewards.append(reward)
 
             if reward > best_reward:
@@ -214,13 +214,13 @@ def run_task(env, task_id):
     except Exception as e:
         # Ensure [END] is always emitted even on exception
         if not rewards:
-            rewards = [0.001]
+            rewards = [0.01]
             step_count = 1
         error_msg = str(e).replace('\n', ' ')
-        print(f"[STEP] step={step_count} action=ERROR reward=0.0010 done=true error={error_msg}", flush=True)
+        print(f"[STEP] step={step_count} action=ERROR reward=0.0100 done=true error={error_msg}", flush=True)
 
     # [END] — always emitted; clamp each reward and use :.4f
-    clamped = [max(0.001, min(0.999, r)) for r in rewards]
+    clamped = [max(0.01, min(0.99, r)) for r in rewards]
     rewards_str = ",".join(f"{r:.4f}" for r in clamped)
     success = best_reward >= 0.99
     print(f"[END] success={'true' if success else 'false'} steps={step_count} rewards={rewards_str}", flush=True)
