@@ -299,7 +299,8 @@ def grade_query(
     elif step_penalty > 0:
         feedback_parts.append(f"⏱️ Efficiency penalty: -{step_penalty:.2f} (attempt {attempt})")
 
-    total = round(min(1.0, total), 4)
+    # Clamp to strictly (0, 1) — evaluator requires scores not equal to 0.0 or 1.0
+    total = round(max(0.001, min(0.999, total)), 4)
 
     feedback = "\n".join(feedback_parts)
 
