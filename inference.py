@@ -20,7 +20,7 @@ STDOUT FORMAT
 
     [START] task=<task_name> env=<benchmark> model=<model_name>
     [STEP]  step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
-    [END]   success=<true|false> steps=<n> rewards=<r1,r2,...,rn>
+    [END]   success=<true|false> steps=<n> score=<best_reward> rewards=<r1,r2,...,rn>
 """
 
 import os
@@ -222,8 +222,10 @@ def run_task(env, task_id):
     # [END] — always emitted; clamp each reward and use :.4f
     clamped = [max(0.01, min(0.99, r)) for r in rewards]
     rewards_str = ",".join(f"{r:.4f}" for r in clamped)
-    success = best_reward >= 0.99
-    print(f"[END] success={'true' if success else 'false'} steps={step_count} rewards={rewards_str}", flush=True)
+    # Task score = best reward, clamped to (0.01, 0.99)
+    task_score = max(0.01, min(0.99, best_reward))
+    success = task_score >= 0.99
+    print(f"[END] success={'true' if success else 'false'} steps={step_count} score={task_score:.4f} rewards={rewards_str}", flush=True)
 
     return best_reward
 
