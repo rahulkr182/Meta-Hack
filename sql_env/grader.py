@@ -303,11 +303,15 @@ def grade_query(
     # Use 0.01/0.99 margins to survive any rounding the evaluator applies
     total = round(max(0.01, min(0.99, total)), 4)
 
+    # Also clamp breakdown values — evaluator may check ALL float fields in the
+    # observation JSON, not just the top-level reward
+    clamped_breakdown = {k: round(max(0.01, min(0.99, v)), 4) for k, v in breakdown.items()}
+
     feedback = "\n".join(feedback_parts)
 
     return {
         "total_reward": total,
-        "breakdown": breakdown,
+        "breakdown": clamped_breakdown,
         "feedback": feedback,
         "agent_rows": agent_rows,
         "agent_columns": agent_columns,
