@@ -204,7 +204,8 @@ class SqlEnvironment(Environment):
             )
 
         # Check if done
-        is_exact = grade_result["breakdown"].get("exact_match", 0.0) >= 1.0
+        # Note: breakdown values are clamped to 0.99, so check >= 0.95
+        is_exact = grade_result["breakdown"].get("exact_match", 0.0) >= 0.95
         attempts_exhausted = self._state.attempts >= self._state.max_attempts
 
         if is_exact:
