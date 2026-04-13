@@ -402,3 +402,7 @@ Connect to `ws://host:8000/ws` and send JSON messages:
 ## 📄 License
 
 MIT
+
+---
+
+*Last updated: April 2026*
