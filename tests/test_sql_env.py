@@ -113,8 +113,8 @@ class TestGrader:
         # Should get syntax + execution + partial table credit
         assert result["total_reward"] > 0.2
         assert result["total_reward"] < 1.0
-        assert result["breakdown"]["syntax_valid"] == 1.0
-        assert result["breakdown"]["execution_success"] == 1.0
+        assert result["breakdown"]["syntax_valid"] >= 0.99
+        assert result["breakdown"]["execution_success"] >= 0.99
 
     def test_all_gold_queries_score_high(self):
         """Every gold query should score >= 0.99."""

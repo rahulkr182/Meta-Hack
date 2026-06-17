@@ -227,7 +227,7 @@ def run_llm_inference(
                 best_query = sql_query
 
             if obs.done:
-                solved = obs.reward_breakdown.get("exact_match", 0.0) >= 1.0
+                solved = obs.metadata.get("is_solved", False)
                 break
 
             previous_feedback = obs.feedback
@@ -261,7 +261,7 @@ def print_summary(results: Dict[str, Dict], model: str) -> None:
     print(f"\n{'Task ID':<15} {'Difficulty':<12} {'Reward':>8} {'Solved':>8} {'Attempts':>10}")
     print("-" * 70)
 
-    by_diff: Dict[str, List[float]] = {"easy": [], "medium": [], "hard": []}
+    by_diff: Dict[str, List[float]] = {"easy": [], "medium": [], "hard": [], "expert": []}
     solved_count = 0
 
     for task_id, info in sorted(results.items()):
@@ -277,7 +277,7 @@ def print_summary(results: Dict[str, Dict], model: str) -> None:
     print(f"  {'Tier':<12} {'Mean Reward':>12} {'Solved':>8} {'Total':>8}")
 
     all_rewards = []
-    for diff in ["easy", "medium", "hard"]:
+    for diff in ["easy", "medium", "hard", "expert"]:
         rewards = by_diff[diff]
         mean_r = sum(rewards) / len(rewards) if rewards else 0.0
         s = sum(1 for r in rewards if r >= 0.99)
