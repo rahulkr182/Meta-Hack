@@ -131,13 +131,11 @@ def call_llm(
 
     content = data["choices"][0]["message"]["content"].strip()
 
-    # Clean up: remove markdown code fences if present
-    if content.startswith("```sql"):
-        content = content[6:]
-    elif content.startswith("```"):
-        content = content[3:]
-    if content.endswith("```"):
-        content = content[:-3]
+    # Clean up: extract SQL from markdown code fences if present
+    import re
+    match = re.search(r'```(?:sql)?\s*(.*?)\s*```', content, re.DOTALL | re.IGNORECASE)
+    if match:
+        content = match.group(1)
 
     return content.strip()
 
