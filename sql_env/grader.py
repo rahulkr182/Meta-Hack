@@ -31,9 +31,11 @@ from sql_env.tasks import Task
 WEIGHTS = {
     "syntax_valid": 0.10,
     "execution_success": 0.10,
-    "correct_tables": 0.15,
-    "correct_columns": 0.15,
-    "partial_row_match": 0.20,
+    "correct_tables": 0.10,
+    "correct_columns": 0.10,
+    "correct_column_order": 0.05,
+    "partial_row_match": 0.15,
+    "correct_row_order": 0.10,
     "exact_match": 0.30,
 }
 
@@ -52,8 +54,10 @@ SQL_KEYWORDS = {
     "case", "when", "then", "else", "end", "asc", "desc", "count",
     "sum", "avg", "min", "max", "round", "coalesce", "ifnull",
     "cast", "over", "partition", "row_number", "rank", "dense_rank",
-    "with", "recursive", "true", "false", "primary", "key", "foreign",
-    "references", "default", "integer", "text", "real", "blob",
+    "lead", "lag", "ntile", "cume_dist", "percent_rank", "first_value",
+    "last_value", "nth_value", "with", "recursive", "true", "false", 
+    "primary", "key", "foreign", "references", "default", "integer",
+    "text", "real", "blob", "numeric", "boolean", "date", "datetime",
 }
 
 
@@ -65,52 +69,90 @@ def _extract_table_references(sql: str) -> Set[str]:
 
     tables = set()
 
-    # Match FROM and JOIN clauses
+    # Identify CTE names to exclude them from actual table references
+    cte_names = set()
+    cte_matches = re.finditer(r'\b(?:with|with\s+recursive)\s+(\w+)\s+as\s*\(', sql_clean)
+    for m in cte_matches:
+        cte_names.add(m.group(1))
+    
+    # Also catch subsequent CTEs in a comma-separated list
+    # e.g., WITH cte1 AS (...), cte2 AS (...)
+    cte_list_matches = re.finditer(r'\bwith\s+.*?\)\s*,\s*(\w+)\s+as\s*\(', sql_clean, re.DOTALL)
+    for m in cte_list_matches:
+         cte_names.add(m.group(1))
+
+    # Match FROM, JOIN, and UPDATE clauses
     patterns = [
-        r'\bfrom\s+(\w+)',
-        r'\bjoin\s+(\w+)',
+        r'\bfrom\s+([a-zA-Z_][a-zA-Z0-9_]*)',
+        r'\bjoin\s+([a-zA-Z_][a-zA-Z0-9_]*)',
+        r'\bupdate\s+([a-zA-Z_][a-zA-Z0-9_]*)',
+        r'\binto\s+([a-zA-Z_][a-zA-Z0-9_]*)',
     ]
     for pattern in patterns:
         for match in re.finditer(pattern, sql_clean):
             name = match.group(1)
-            if name not in SQL_KEYWORDS:
+            if name not in SQL_KEYWORDS and name not in cte_names:
                 tables.add(name)
 
     return tables
 
 
-def _extract_selected_columns(sql: str) -> Set[str]:
-    """Extract column names from the SELECT clause (best-effort)."""
+def _extract_selected_columns(sql: str) -> List[str]:
+    """Extract column names from the SELECT clause (best-effort), maintaining order."""
     sql_clean = re.sub(r"'[^']*'", "", sql)
     sql_clean = re.sub(r"--[^\n]*", "", sql_clean)
     sql_clean = sql_clean.lower()
 
-    # Find the SELECT ... FROM segment
-    match = re.search(r'\bselect\s+(.*?)\bfrom\b', sql_clean, re.DOTALL)
-    if not match:
-        return set()
+    # Try to extract the outer SELECT statement, robust to subqueries and CTEs
+    # A simple but effective heuristic is to find the LAST SELECT ... FROM block
+    # or handle unions by extracting from all SELECT ... FROM segments that are not in parens.
+    
+    # Remove nested parens contents to simplify outer select extraction
+    prev_len = -1
+    while len(sql_clean) != prev_len:
+        prev_len = len(sql_clean)
+        sql_clean = re.sub(r'\([^()]*\)', '()', sql_clean)
 
-    select_clause = match.group(1)
-
-    if "*" in select_clause:
-        return {"*"}
-
-    columns = set()
-    # Split by comma and extract the column name (after dots, before AS)
-    for part in select_clause.split(","):
-        part = part.strip()
-        # Handle "alias" in "expr AS alias"
-        as_match = re.search(r'\bas\s+(\w+)\s*$', part)
-        if as_match:
-            columns.add(as_match.group(1))
+    columns = []
+    
+    # Find all SELECT ... FROM that remain in the un-nested structure
+    matches = list(re.finditer(r'\bselect\s+(.*?)\bfrom\b', sql_clean, re.DOTALL))
+    
+    if not matches:
+        # Fallback if FROM is missing
+        match = re.search(r'\bselect\s+(.*)', sql_clean, re.DOTALL)
+        if match:
+             matches = [match]
         else:
-            # Handle "table.column" or just "column"
-            col_match = re.search(r'(\w+)\s*$', part)
-            if col_match:
-                name = col_match.group(1)
-                if name not in SQL_KEYWORDS:
-                    columns.add(name)
+            return []
 
+    # Process all selected blocks (helps with UNIONs)
+    for match in matches:
+        select_clause = match.group(1)
+
+        if "*" in select_clause:
+            columns.append("*")
+            continue
+
+        # Split by comma and extract the column name (after dots, before AS)
+        for part in select_clause.split(","):
+            part = part.strip()
+            if not part or part == '()': 
+                continue
+                
+            # Handle "alias" in "expr AS alias"
+            as_match = re.search(r'\bas\s+(\w+)\s*$', part)
+            if as_match:
+                columns.append(as_match.group(1))
+            else:
+                # Handle "table.column" or just "column"
+                # e.g. "e.first_name" -> "first_name"
+                col_match = re.search(r'(?:[a-zA-Z0-9_]+\.)?([a-zA-Z0-9_]+)\s*$', part)
+                if col_match:
+                    name = col_match.group(1)
+                    if name not in SQL_KEYWORDS:
+                        columns.append(name)
+                        
     return columns
 
 
@@ -163,14 +205,21 @@ def grade_query(
         # Try to compile the SQL to check syntax (without executing)
         sql_stripped = agent_sql.strip().rstrip(";")
         # Use EXPLAIN to check syntax without side effects
-        conn.execute(f"EXPLAIN {sql_stripped}")
+        try:
+            conn.execute(f"EXPLAIN {sql_stripped}")
+        except sqlite3.Error:
+             # Fallback to complete_statement or prepare if EXPLAIN fails on valid complex queries
+             if not sqlite3.complete_statement(sql_stripped + ";"):
+                  raise
+             # Also try dry-run prepare if possible, but EXPLAIN is usually best in SQLite
+             
         breakdown["syntax_valid"] = 1.0
         feedback_parts.append("✓ SQL syntax is valid")
-    except sqlite3.Error:
+    except sqlite3.Error as e:
         breakdown["syntax_valid"] = 0.0
-        feedback_parts.append("✗ SQL syntax error — query could not be parsed")
+        feedback_parts.append(f"✗ SQL syntax error: {str(e)}")
         # If syntax is invalid, we can still try to check table/column names
-        error_msg = "Syntax error"
+        error_msg = f"Syntax error: {str(e)}"
 
     # ---- 2. Execution success ----
     agent_rows_raw, agent_cols_raw, exec_error = execute_query(conn, agent_sql)
@@ -205,9 +254,12 @@ def grade_query(
     elif not agent_tables:
         feedback_parts.append("✗ Could not identify table references in your query")
 
-    # ---- 4. Correct columns ----
-    gold_cols_parsed = _extract_selected_columns(task.gold_query)
-    agent_cols_parsed = _extract_selected_columns(agent_sql)
+    # ---- 4. Correct columns & Column Order ----
+    gold_cols_list = _extract_selected_columns(task.gold_query)
+    agent_cols_list = _extract_selected_columns(agent_sql)
+    
+    gold_cols_parsed = set(gold_cols_list)
+    agent_cols_parsed = set(agent_cols_list)
 
     if gold_cols_parsed and agent_cols_parsed:
         if "*" in agent_cols_parsed and "*" not in gold_cols_parsed:
@@ -216,16 +268,33 @@ def grade_query(
             feedback_parts.append("◐ Using SELECT * — select specific columns for full credit")
         elif "*" in gold_cols_parsed and "*" in agent_cols_parsed:
             breakdown["correct_columns"] = 1.0
+            breakdown["correct_column_order"] = 1.0
             feedback_parts.append("✓ Correct column selection")
         else:
+            # Semantic matching for aliases
+            normalized_gold = {c.replace("emp_count", "employee_count").replace("avg_sal", "avg_salary") for c in gold_cols_parsed}
+            normalized_agent = {c.replace("emp_count", "employee_count").replace("avg_sal", "avg_salary") for c in agent_cols_parsed}
+            
             col_overlap = (
-                len(gold_cols_parsed & agent_cols_parsed) / len(gold_cols_parsed)
-                if gold_cols_parsed
+                len(normalized_gold & normalized_agent) / len(normalized_gold)
+                if normalized_gold
                 else 0.0
             )
             breakdown["correct_columns"] = round(col_overlap, 3)
+            
+            # Check column order if exact set matches
             if col_overlap >= 1.0:
-                feedback_parts.append("✓ Correct columns selected")
+                 feedback_parts.append("✓ Correct columns selected")
+                 # Order check
+                 if len(gold_cols_list) == len(agent_cols_list) and all(
+                      g.replace("emp_count", "employee_count").replace("avg_sal", "avg_salary") == 
+                      a.replace("emp_count", "employee_count").replace("avg_sal", "avg_salary")
+                      for g, a in zip(gold_cols_list, agent_cols_list)
+                 ):
+                      breakdown["correct_column_order"] = 1.0
+                 else:
+                      breakdown["correct_column_order"] = 0.5
+                      feedback_parts.append("◐ Columns are correct but out of order")
             elif col_overlap > 0:
                 feedback_parts.append(
                     f"◐ Partially correct columns. Matched: {gold_cols_parsed & agent_cols_parsed}"
@@ -233,17 +302,23 @@ def grade_query(
             else:
                 feedback_parts.append("✗ Selected columns don't match expected output")
 
-    # ---- 5. Partial row match (Jaccard similarity) ----
+    # ---- 5. Partial row match (Jaccard similarity) & Row Order ----
     if agent_rows is not None and gold_rows is not None:
         gold_set = _normalize_rows(gold_rows)
         agent_set = _normalize_rows(agent_rows)
+        
+        # Row Order Match
+        gold_norm_list = [tuple(str(v).strip().lower() for v in r) for r in gold_rows]
+        agent_norm_list = [tuple(str(v).strip().lower() for v in r) for r in agent_rows]
 
         if not gold_set and not agent_set:
             # Both empty — perfect match
             breakdown["partial_row_match"] = 1.0
+            breakdown["correct_row_order"] = 1.0
             feedback_parts.append("✓ Both queries return empty results (correct)")
         elif not gold_set or not agent_set:
             breakdown["partial_row_match"] = 0.0
+            breakdown["correct_row_order"] = 0.0
             if not agent_set:
                 feedback_parts.append("✗ Your query returned no rows, but results were expected")
             else:
@@ -255,7 +330,16 @@ def grade_query(
             breakdown["partial_row_match"] = round(jaccard, 3)
 
             if jaccard >= 1.0:
-                feedback_parts.append("✓ All result rows match perfectly")
+                feedback_parts.append("✓ All result rows match perfectly (unordered)")
+                
+                # Check Row Order
+                if gold_norm_list == agent_norm_list:
+                     breakdown["correct_row_order"] = 1.0
+                     feedback_parts.append("✓ Result row order is strictly correct")
+                else:
+                     breakdown["correct_row_order"] = 0.0
+                     feedback_parts.append("✗ Result row order differs from expected (check ORDER BY)")
+                     
             elif jaccard > 0.5:
                 feedback_parts.append(
                     f"◐ Good partial match ({intersection}/{len(gold_set)} expected rows found)"

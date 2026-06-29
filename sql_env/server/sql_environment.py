@@ -6,12 +6,14 @@ which are executed and graded against gold-standard answers.
 """
 
 from typing import Any, Optional
+import time
 from uuid import uuid4
 
 from openenv.core.env_server.interfaces import Environment
 from openenv.core.env_server.types import State
 
 from sql_env.db_utils import create_database, execute_query, format_results
+import re
 from sql_env.grader import grade_query
 from sql_env.tasks import Task, get_random_task, get_task, TASKS
 
@@ -56,6 +58,30 @@ class SqlEnvironment(Environment):
         self._db_conn = None
         self._last_observation: Optional[SqlObservation] = None
         self._blind_mode: bool = False
+        self._episode_start_time: float = 0.0
+        self._query_history: list = []
+
+    def _calculate_complexity(self, sql: str) -> dict:
+        """Calculate a basic complexity score for a SQL query."""
+        sql_clean = sql.lower()
+        complexity = {
+            "num_joins": len(re.findall(r'\bjoin\b', sql_clean)),
+            "has_subquery": bool(re.search(r'\(\s*select\b', sql_clean)),
+            "has_cte": bool(re.search(r'\bwith\b', sql_clean)),
+            "has_window": bool(re.search(r'\bover\s*\(', sql_clean)),
+            "has_agg": bool(re.search(r'\b(count|sum|avg|min|max)\b', sql_clean)),
+        }
+        
+        # Compute a single aggregate score (0-10 roughly)
+        score = 1 # Base score
+        score += complexity["num_joins"] * 1.5
+        if complexity["has_subquery"]: score += 2.0
+        if complexity["has_cte"]: score += 3.0
+        if complexity["has_window"]: score += 2.5
+        if complexity["has_agg"]: score += 1.0
+        
+        complexity["score"] = round(score, 1)
+        return complexity
 
     def reset(
         self,
@@ -114,6 +140,8 @@ class SqlEnvironment(Environment):
             best_reward=0.0,
             is_solved=False,
         )
+        self._episode_start_time = time.time()
+        self._query_history = []
 
         # Schema description: hidden in blind mode
         if self._blind_mode:
@@ -181,6 +209,7 @@ class SqlEnvironment(Environment):
         # Increment counters
         self._state.step_count += 1
         self._state.attempts += 1
+        step_start_time = time.time()
 
         # Grade the query
         grade_result = grade_query(
@@ -229,6 +258,18 @@ class SqlEnvironment(Environment):
             feedback_lines.append(
                 f"\nCorrect query was:\n{self._current_task.gold_query.strip()}"
             )
+            
+        step_duration = time.time() - step_start_time
+        episode_duration = time.time() - self._episode_start_time
+        
+        complexity = self._calculate_complexity(action.sql_query)
+        
+        self._query_history.append({
+            "attempt": self._state.attempts,
+            "query": action.sql_query,
+            "reward": reward,
+            "complexity": complexity["score"],
+        })
 
         obs = SqlObservation(
             schema_description=self._current_task.schema_sql.strip(),
@@ -247,6 +288,10 @@ class SqlEnvironment(Environment):
                 "best_reward": self._state.best_reward,
                 "accumulated_reward": self._state.accumulated_reward,
                 "is_solved": self._state.is_solved,
+                "step_duration_sec": round(step_duration, 3),
+                "episode_duration_sec": round(episode_duration, 3),
+                "query_complexity": complexity,
+                "query_history": self._query_history,
             },
         )
         self._last_observation = obs

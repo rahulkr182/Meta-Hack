@@ -192,6 +192,8 @@ class Task:
     question: str
     hint: str  # Short hint about SQL concepts needed
     gold_query: str
+    sql_concepts: List[str] = field(default_factory=list) # Tags for SQL concepts used
+    expected_row_count: int = field(default=-1) # Used for validation (-1 means not validated yet)
     schema_sql: str = field(default=SHARED_SCHEMA, repr=False)
     seed_sql: str = field(default=SHARED_SEED, repr=False)
 
@@ -210,6 +212,7 @@ class Task:
                 )
             self._gold_rows = rows
             self._gold_columns = cols
+            self.expected_row_count = len(rows) if rows else 0
         finally:
             conn.close()
 
@@ -244,6 +247,7 @@ _register(Task(
     difficulty="easy",
     question="List all employees in the Sales department. Show their first name, last name, and salary.",
     hint="Use SELECT with a WHERE clause. You'll need to join or filter by department.",
+    sql_concepts=["JOIN", "WHERE"],
     gold_query="""
         SELECT e.first_name, e.last_name, e.salary
         FROM employees e
@@ -258,6 +262,7 @@ _register(Task(
     difficulty="easy",
     question="How many orders were placed in 2024? Return a single count.",
     hint="Use COUNT() with a WHERE clause filtering on order_date.",
+    sql_concepts=["COUNT", "WHERE", "DATE"],
     gold_query="""
         SELECT COUNT(*) AS order_count
         FROM orders
@@ -270,6 +275,7 @@ _register(Task(
     difficulty="easy",
     question="What are the distinct product categories? List just the category names, sorted alphabetically.",
     hint="Use SELECT DISTINCT or query the product_categories table directly.",
+    sql_concepts=["SELECT DISTINCT", "ORDER BY"],
     gold_query="""
         SELECT name
         FROM product_categories
@@ -285,6 +291,7 @@ _register(Task(
     difficulty="medium",
     question="Show the total revenue per product category. Display the category name and total revenue, sorted by revenue descending.",
     hint="Join order_items → products → product_categories, then GROUP BY category with SUM.",
+    sql_concepts=["MULTI-JOIN", "GROUP BY", "SUM"],
     gold_query="""
         SELECT pc.name AS category, SUM(oi.quantity * oi.unit_price) AS total_revenue
         FROM order_items oi
@@ -300,6 +307,7 @@ _register(Task(
     difficulty="medium",
     question="Find employees who manage more than 2 other employees. Show the manager's first name, last name, and the number of direct reports.",
     hint="Use a self-join or subquery on manager_id, GROUP BY, and HAVING.",
+    sql_concepts=["SELF-JOIN", "GROUP BY", "HAVING"],
     gold_query="""
         SELECT m.first_name, m.last_name, COUNT(e.id) AS direct_reports
         FROM employees e
@@ -315,6 +323,7 @@ _register(Task(
     difficulty="medium",
     question="List customers who have placed at least 2 orders. Show the customer name and their total number of orders, sorted by order count descending.",
     hint="Join customers and orders, then GROUP BY customer with HAVING COUNT >= 2.",
+    sql_concepts=["JOIN", "GROUP BY", "HAVING"],
     gold_query="""
         SELECT c.name, COUNT(o.id) AS order_count
         FROM customers c
@@ -332,7 +341,8 @@ _register(Task(
     task_id="hard_01",
     difficulty="hard",
     question="Rank departments by their average employee salary (descending). Show department name, average salary (rounded to 2 decimal places), and the rank. Include all departments.",
-    hint="Use AVG with GROUP BY and either a window function (RANK/ROW_NUMBER) or a subquery for ranking.",
+    hint="[BLIND MODE] Rank departments by average salary. Use AVG with GROUP BY and a window function like RANK() OVER (ORDER BY ... DESC). Note: ROUND(val, 2) is needed.",
+    sql_concepts=["WINDOW FUNCTION", "RANK", "AVG", "ROUND"],
     gold_query="""
         SELECT
             d.name AS department,
@@ -349,7 +359,8 @@ _register(Task(
     task_id="hard_02",
     difficulty="hard",
     question="Find products that have never been ordered. Show the product name and its category name.",
-    hint="Use a LEFT JOIN with IS NULL, or a NOT IN / NOT EXISTS subquery.",
+    hint="[BLIND MODE] Find products with 0 orders. Use a LEFT JOIN from products to order_items and filter WHERE the order_items id IS NULL, or use NOT IN.",
+    sql_concepts=["LEFT JOIN", "IS NULL", "NOT EXISTS"],
     gold_query="""
         SELECT p.name AS product_name, pc.name AS category_name
         FROM products p
@@ -364,7 +375,8 @@ _register(Task(
     task_id="hard_03",
     difficulty="hard",
     question="Show the cumulative (running) total of order amounts by date. Display the order date and the running total up to and including that date, sorted by date.",
-    hint="Use a window function: SUM() OVER (ORDER BY ...) for a running total.",
+    hint="[BLIND MODE] Running total required. Use the window function: SUM(amount) OVER (ORDER BY date_col, id). Always order by a unique ID to break ties.",
+    sql_concepts=["WINDOW FUNCTION", "SUM OVER"],
     gold_query="""
         SELECT
             order_date,
@@ -382,7 +394,8 @@ _register(Task(
     task_id="expert_01",
     difficulty="expert",
     question="Using a CTE (WITH clause), find the full management chain for each employee. Show the employee's first name, last name, and the number of management levels above them (0 for top-level managers). Sort by chain length descending, then by last name.",
-    hint="Use a recursive CTE with the manager_id column to walk up the management chain. Count the levels.",
+    hint="[BLIND MODE] Use a recursive CTE (WITH RECURSIVE) on the employees table starting with manager_id IS NULL. Track depth by adding +1 in the recursive step.",
+    sql_concepts=["RECURSIVE CTE"],
     gold_query="""
         WITH RECURSIVE chain AS (
             SELECT id, first_name, last_name, manager_id, 0 AS depth
@@ -403,7 +416,8 @@ _register(Task(
     task_id="expert_02",
     difficulty="expert",
     question="For each department, calculate: the number of employees, average salary, and classify the department as 'Over Budget' if total salaries exceed the department budget, or 'Within Budget' otherwise. Show department name, employee count, average salary (rounded to 2 decimals), total salary, budget, and budget status. Sort by department name.",
-    hint="Use CASE expression with GROUP BY. Join employees with departments and compare SUM(salary) to budget.",
+    hint="[BLIND MODE] Compare SUM(salary) against department budget. Use a CASE WHEN ... THEN ... ELSE ... END block inside your SELECT to classify the status.",
+    sql_concepts=["CASE WHEN", "GROUP BY", "AGGREGATION"],
     gold_query="""
         SELECT
             d.name AS department,
@@ -426,7 +440,8 @@ _register(Task(
     task_id="expert_03",
     difficulty="expert",
     question="Find employees whose salary is above the average salary of their own department. Show the employee's first name, last name, their salary, their department name, and the department average salary (rounded to 2 decimals). Sort by department name, then by salary descending.",
-    hint="Use a correlated subquery or a CTE/subquery that computes per-department average, then filter employees above it.",
+    hint="[BLIND MODE] Use a CTE or subquery to first calculate department averages. Then join that subquery back to the main employees table to compare individual salaries.",
+    sql_concepts=["CORRELATED SUBQUERY", "CTE", "JOIN"],
     gold_query="""
         SELECT
             e.first_name,
@@ -450,7 +465,8 @@ _register(Task(
     task_id="expert_04",
     difficulty="expert",
     question="Analyze monthly order trends: for each month that has orders, show the month (as YYYY-MM), the number of orders, total revenue, and the percentage change in revenue compared to the previous month (NULL for the first month). Round the percentage to 2 decimal places. Sort by month.",
-    hint="Use strftime to extract month, window functions LAG() to get previous month's revenue, then calculate percentage change.",
+    hint="[BLIND MODE] Format dates with strftime('%Y-%m', date_col). Group by month to get totals, then use the window function LAG(revenue) OVER (ORDER BY month) to find the previous month's revenue.",
+    sql_concepts=["DATE FORMATTING", "LAG", "WINDOW FUNCTION"],
     gold_query="""
         WITH monthly AS (
             SELECT
@@ -509,3 +525,18 @@ def get_random_task(difficulty: Optional[str] = None, seed: Optional[int] = None
     if not candidates:
         raise ValueError(f"No tasks found for difficulty='{difficulty}'")
     return rng.choice(candidates)
+
+
+def validate_all_tasks():
+    """Ensure all gold queries evaluate correctly and return rows. Called on import."""
+    for task_id, task in TASKS.items():
+        # This will raise ValueError if gold query fails execution
+        try:
+             _ = task.gold_rows
+        except Exception as e:
+             raise RuntimeError(f"Startup validation failed for task {task_id}: {e}")
+        if task.expected_row_count == 0:
+             print(f"Warning: Task {task_id} gold query returns 0 rows.")
+
+# Run validation automatically
+validate_all_tasks()

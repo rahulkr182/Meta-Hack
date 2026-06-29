@@ -81,8 +81,8 @@ You are an expert SQL query writer specializing in SQLite. You are given a datab
 and a natural-language question. Write the correct SQL query that answers the question.
 
 Rules:
-- Output ONLY the SQL query, nothing else
-- Do NOT include markdown code fences, explanations, or comments
+- Think step-by-step. First, output a <thought>...</thought> block explaining your reasoning.
+- After thinking, output ONLY the SQL query inside ```sql...``` fences.
 - Use standard SQLite-compatible SQL
 - Use explicit column names (never SELECT *)
 - Use table aliases for clarity (e.g., e for employees, d for departments)
@@ -98,13 +98,37 @@ SQLite-specific notes:
 """).strip()
 
 FEW_SHOT_EXAMPLES = textwrap.dedent("""
-Example 1:
+Example 1 (Easy):
 Question: How many employees are in each department?
-SQL: SELECT d.name AS department, COUNT(e.id) AS emp_count FROM employees e JOIN departments d ON e.department_id = d.id GROUP BY d.id, d.name ORDER BY emp_count DESC;
+<thought>
+I need to count employees grouped by their department.
+1. Tables: `employees` (e), `departments` (d)
+2. Joins: `e.department_id = d.id`
+3. Grouping: by department ID and name
+4. Aggregation: `COUNT(e.id)`
+5. Ordering: by count descending as is typical for this type of query
+</thought>
+```sql
+SELECT d.name AS department, COUNT(e.id) AS emp_count 
+FROM employees e 
+JOIN departments d ON e.department_id = d.id 
+GROUP BY d.id, d.name 
+ORDER BY emp_count DESC;
+```
 
-Example 2:
+Example 2 (Hard):
 Question: Find the running total of order amounts by date.
-SQL: SELECT order_date, total_amount, SUM(total_amount) OVER (ORDER BY order_date, id) AS running_total FROM orders ORDER BY order_date, id;
+<thought>
+I need a running total over time.
+1. Tables: `orders`
+2. Window function: `SUM(total_amount) OVER (ORDER BY order_date, id)` to handle ties and maintain stable ordering.
+3. Ordering: Final output should be ordered by date and id.
+</thought>
+```sql
+SELECT order_date, total_amount, SUM(total_amount) OVER (ORDER BY order_date, id) AS running_total 
+FROM orders 
+ORDER BY order_date, id;
+```
 """).strip()
 
 
@@ -112,11 +136,16 @@ def build_user_prompt(schema, question, hint, attempt=1, prev_feedback="", diffi
     prompt = f"Database Schema:\n{schema}\n\nQuestion: {question}"
     if hint and not hint.startswith("[BLIND"):
         prompt += f"\n\nHint: {hint}"
-    if difficulty in ("hard", "expert"):
+    
+    # Adaptive prompting: Only show few-shot examples on first attempt or if hard/expert
+    if attempt == 1 or difficulty in ("hard", "expert"):
         prompt += f"\n\n{FEW_SHOT_EXAMPLES}"
+        
     if attempt > 1 and prev_feedback:
-        prompt += f"\n\nYour previous attempt got this feedback:\n{prev_feedback}\n\nFix the issues and try again."
-    prompt += "\n\nSQL query:"
+        prompt += f"\n\n--- PREVIOUS ATTEMPT FAILED ---\nYour previous attempt got this feedback:\n{prev_feedback}\n\n"
+        prompt += "Analyze this feedback carefully in your <thought> block. Identify exactly which tables, columns, or logic failed. Fix the issues and try again."
+        
+    prompt += "\n\nProvide your response (remember to include <thought> and ```sql blocks):"
     return prompt
 
 
@@ -131,18 +160,21 @@ def call_llm(schema, question, hint, attempt=1, prev_feedback="", difficulty="ea
             {"role": "user", "content": user_msg},
         ],
         temperature=TEMPERATURE,
-        max_tokens=MAX_TOKENS,
+        max_tokens=MAX_TOKENS + 256, # Extra tokens for thought block
     )
 
     content = response.choices[0].message.content.strip()
 
-    # Strip markdown code fences if present
-    if content.startswith("```sql"):
-        content = content[6:]
-    elif content.startswith("```"):
-        content = content[3:]
-    if content.endswith("```"):
-        content = content[:-3]
+    # Extract SQL from markdown code fences
+    import re
+    match = re.search(r'```(?:sql)?\s*(.*?)\s*```', content, re.DOTALL | re.IGNORECASE)
+    if match:
+        content = match.group(1)
+    else:
+        # Fallback: try to strip out thought block if they forgot fences
+        thought_match = re.search(r'</thought>\s*(.*)', content, re.DOTALL | re.IGNORECASE)
+        if thought_match:
+            content = thought_match.group(1)
 
     return content.strip()
 

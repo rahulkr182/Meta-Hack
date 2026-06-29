@@ -26,6 +26,12 @@ def create_database(schema_sql: str, seed_sql: str) -> sqlite3.Connection:
     return conn
 
 
+import re
+import time
+
+class TimeoutException(Exception):
+    pass
+
 def execute_query(
     conn: sqlite3.Connection,
     sql: str,
@@ -45,21 +51,57 @@ def execute_query(
         - error_message: Error string, or None if success.
     """
     try:
-        # Basic SQL injection / danger guard: disallow writes
-        sql_upper = sql.strip().upper()
-        for forbidden in ("INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "TRUNCATE"):
-            if sql_upper.startswith(forbidden):
-                return None, None, f"Write operations are not allowed. Your query starts with '{forbidden}'."
+        # Deep SQL injection guard: strip comments and strings to find actual command
+        sql_clean = re.sub(r'--.*', '', sql)
+        sql_clean = re.sub(r'/\*.*?\*/', '', sql_clean, flags=re.DOTALL)
+        sql_clean = re.sub(r"'[^']*'", "''", sql_clean)
+        sql_upper = sql_clean.strip().upper()
+        
+        # Check first token
+        first_token = sql_upper.split()[0] if sql_upper.split() else ""
+        
+        forbidden_commands = {
+            "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", 
+            "TRUNCATE", "REPLACE", "ATTACH", "DETACH", "VACUUM"
+        }
+        
+        if first_token in forbidden_commands:
+            return None, None, f"Write operations are not allowed. Your query starts with '{first_token}'."
+            
+        # Specific check for PRAGMA (allow only read-only PRAGMAs)
+        if first_token == "PRAGMA":
+            # Very basic check: block setting pragmas (which typically have an '=' or are 'PRAGMA schema.name(value)')
+            # EXCEPT table_info which is PRAGMA table_info(name)
+            if "=" in sql_upper or ( "(" in sql_upper and not "TABLE_INFO" in sql_upper):
+                 return None, None, "Setting PRAGMA values is not allowed."
+
+        # Setup timeout handler
+        start_time = time.time()
+        def progress_handler():
+            if time.time() - start_time > timeout_seconds:
+                raise TimeoutException(f"Query exceeded {timeout_seconds}s timeout")
+            return 0
+            
+        conn.set_progress_handler(progress_handler, 1000)
 
         cursor = conn.execute(sql)
         rows = cursor.fetchall()
         column_names = (
             [desc[0] for desc in cursor.description] if cursor.description else []
         )
+        
+        # Clear progress handler
+        conn.set_progress_handler(None, 0)
+        
         return rows, column_names, None
+    except TimeoutException as e:
+        conn.set_progress_handler(None, 0)
+        return None, None, f"Timeout Error: {str(e)}"
     except sqlite3.Error as e:
+        conn.set_progress_handler(None, 0)
         return None, None, f"SQL Error: {str(e)}"
     except Exception as e:
+        conn.set_progress_handler(None, 0)
         return None, None, f"Execution Error: {str(e)}"
 
 
@@ -100,10 +142,20 @@ def format_results(
     # Build rows
     lines = [header, separator]
     for row in display_rows:
-        line = " | ".join(
-            str(val).ljust(col_widths[i]) for i, val in enumerate(row)
-        )
-        lines.append(line)
+        formatted_row = []
+        for i, val in enumerate(row):
+            val_str = str(val)
+            # Truncate long strings
+            if len(val_str) > 50:
+                 val_str = val_str[:47] + "..."
+            
+            # Right-align numeric types (int, float)
+            if isinstance(val, (int, float)):
+                 formatted_row.append(val_str.rjust(col_widths[i]))
+            else:
+                 formatted_row.append(val_str.ljust(col_widths[i]))
+                 
+        lines.append(" | ".join(formatted_row))
 
     if len(rows) > max_rows:
         lines.append(f"... ({len(rows) - max_rows} more rows)")

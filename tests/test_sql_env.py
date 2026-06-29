@@ -79,6 +79,52 @@ class TestDbUtils:
         result = format_results([], ["id"])
         assert "0 rows" in result
 
+    def test_timeout_enforced(self):
+        conn = create_database("CREATE TABLE t (id INT);", "INSERT INTO t VALUES (1);")
+        # An infinite loop in SQLite using CTE
+        sql = """
+        WITH RECURSIVE c(x) AS (
+          VALUES(1)
+          UNION ALL
+          SELECT x+1 FROM c
+        )
+        SELECT * FROM c;
+        """
+        # Execute with very short timeout
+        _, _, err = execute_query(conn, sql, timeout_seconds=0.1)
+        conn.close()
+        assert err is not None
+        assert "Timeout Error" in err or "interrupted" in err.lower()
+
+    def test_security_guards_improved(self):
+        conn = create_database("CREATE TABLE t (id INT);", "")
+        
+        # Test leading comments bypass attempt
+        sql1 = "-- sneaky comment\nINSERT INTO t VALUES (1);"
+        _, _, err1 = execute_query(conn, sql1)
+        assert err1 is not None, "Bypass with leading comment succeeded"
+        assert "Write operations" in err1
+        
+        # Test block comments bypass attempt
+        sql2 = "/* sneaky \n block */ DROP TABLE t;"
+        _, _, err2 = execute_query(conn, sql2)
+        assert err2 is not None, "Bypass with block comment succeeded"
+        assert "Write operations" in err2
+        
+        # Test PRAGMA modification
+        sql3 = "PRAGMA foreign_keys = OFF;"
+        _, _, err3 = execute_query(conn, sql3)
+        assert err3 is not None, "PRAGMA modification succeeded"
+        assert "Setting PRAGMA values" in err3
+        
+        # Test valid PRAGMA read
+        sql4 = "PRAGMA table_info(t);"
+        rows, _, err4 = execute_query(conn, sql4)
+        assert err4 is None, "Valid PRAGMA read failed"
+        assert rows is not None
+        
+        conn.close()
+
 
 # ---------------------------------------------------------------------------
 # Grader Tests
@@ -116,6 +162,27 @@ class TestGrader:
         assert result["breakdown"]["syntax_valid"] >= 0.99
         assert result["breakdown"]["execution_success"] >= 0.99
 
+    def test_column_order_sensitivity(self):
+        """Grader should penalize slightly if columns are out of order."""
+        task = get_task("easy_01")
+        conn = create_database(task.schema_sql, task.seed_sql)
+        
+        # Gold: SELECT e.first_name, e.last_name, e.salary ...
+        # Agent: SELECT e.salary, e.last_name, e.first_name ...
+        sql = """
+            SELECT e.salary, e.last_name, e.first_name
+            FROM employees e
+            JOIN departments d ON e.department_id = d.id
+            WHERE d.name = 'Sales'
+            ORDER BY e.last_name;
+        """
+        result = grade_query(sql, task, conn)
+        conn.close()
+        
+        assert result["breakdown"]["correct_columns"] >= 0.99
+        assert result["breakdown"]["correct_column_order"] < 0.99
+        assert "out of order" in result["feedback"]
+
     def test_all_gold_queries_score_high(self):
         """Every gold query should score >= 0.99."""
         for task_id, task in TASKS.items():
@@ -139,7 +206,16 @@ class TestEnvironment:
         assert isinstance(obs, SqlObservation)
         assert obs.question != ""
         assert obs.schema_description != ""
+        assert "[BLIND MODE]" not in obs.schema_description
         assert obs.done is False
+        env.close()
+
+    def test_blind_mode(self):
+        env = SqlEnvironment()
+        obs = env.reset(task_id="expert_01")  # Expert tasks default to blind mode
+        assert "[BLIND MODE]" in obs.schema_description
+        assert "CREATE TABLE" not in obs.schema_description
+        assert obs.metadata["blind_mode"] is True
         env.close()
 
     def test_step_returns_reward(self):
